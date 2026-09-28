@@ -11,7 +11,7 @@ import { cn } from '@/lib/utils'
 // Mock stats are displayed as demo values — not real verified statistics
 const STATS_CONFIG = [
   { key: 'totalPlaces', label: 'Places Mapped', Icon: Map, suffix: '+' },
-  { key: 'totalReports', label: 'Accessibility Reports', Icon: Database, suffix: '+' },
+  { key: 'totalReports', label: 'Community Reports', Icon: Database, suffix: '+' },
   { key: 'verifiedPlaces', label: 'Verified Places', Icon: ShieldCheck, suffix: '+' },
   { key: 'areasCount', label: 'Areas Covered', Icon: TrendingUp, suffix: '+' },
 ] as const
@@ -127,7 +127,7 @@ export default function Home() {
       {/* Stats */}
       <section aria-labelledby="stats-heading" className="border-b border-border">
         <div className="container mx-auto px-4 py-12">
-          <h2 id="stats-heading" className="sr-only">Platform statistics (demo data)</h2>
+          <h2 id="stats-heading" className="sr-only">Platform statistics</h2>
           <div className="grid grid-cols-2 md:grid-cols-4 gap-6">
             {STATS_CONFIG.map(({ key, label, Icon, suffix }) => (
               <div key={key} className="text-center">
@@ -145,9 +145,7 @@ export default function Home() {
               </div>
             ))}
           </div>
-          <p className="text-center text-xs text-muted-foreground mt-6 italic">
-            Demo data — these are illustrative figures, not verified production statistics.
-          </p>
+
         </div>
       </section>
 

@@ -14,8 +14,12 @@ interface PlaceCardProps {
 }
 
 export function PlaceCard({ place, compact = false, className }: PlaceCardProps) {
+  // Fix 9: unique ID so aria-labelledby resolves correctly per card
+  const headingId = `place-card-heading-${place.id}`
+
   return (
     <article
+      aria-labelledby={headingId}
       className={cn(
         'border border-border rounded-lg bg-card overflow-hidden hover:border-primary/30 transition-colors',
         className
@@ -26,6 +30,7 @@ export function PlaceCard({ place, compact = false, className }: PlaceCardProps)
         <div className="flex items-start justify-between gap-2 mb-3">
           <div className="min-w-0">
             <Link
+              id={headingId}
               to={`/places/${place.id}`}
               className="font-semibold text-foreground hover:text-primary transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring rounded-sm"
             >
@@ -64,14 +69,14 @@ export function PlaceCard({ place, compact = false, className }: PlaceCardProps)
               Verified {getRelativeDate(place.verification.lastVerified)}
             </span>
             {place.phone && (
-              <span className="flex items-center gap-1 hidden sm:flex">
+              <span className="hidden sm:flex items-center gap-1">
                 <Phone className="w-3 h-3" aria-hidden="true" />
                 Has contact
               </span>
             )}
           </div>
           <Button asChild variant="ghost" size="sm" className="h-7 px-2 text-xs gap-1">
-            <Link to={`/places/${place.id}`}>
+            <Link to={`/places/${place.id}`} aria-label={`View details for ${place.name}`}>
               Details
               <ChevronRight className="w-3 h-3" aria-hidden="true" />
             </Link>

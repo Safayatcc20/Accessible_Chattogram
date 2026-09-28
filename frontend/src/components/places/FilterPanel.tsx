@@ -1,3 +1,4 @@
+import { type RefObject } from 'react'
 import { X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
@@ -11,6 +12,9 @@ interface FilterPanelProps {
   onChange: (filters: FilterState) => void
   onClose?: () => void
   resultCount?: number
+  // Fix 6: support dialog accessibility from Explore
+  titleId?: string
+  closeRef?: RefObject<HTMLButtonElement>
 }
 
 const CATEGORIES: { value: PlaceCategory; label: string }[] = [
@@ -44,7 +48,14 @@ function toggleItem<T>(arr: T[], item: T): T[] {
   return arr.includes(item) ? arr.filter(i => i !== item) : [...arr, item]
 }
 
-export function FilterPanel({ filters, onChange, onClose, resultCount }: FilterPanelProps) {
+export function FilterPanel({
+  filters,
+  onChange,
+  onClose,
+  resultCount,
+  titleId,
+  closeRef,
+}: FilterPanelProps) {
   const hasActiveFilters =
     filters.categories.length > 0 ||
     filters.accessibilityFeatures.length > 0 ||
@@ -69,7 +80,8 @@ export function FilterPanel({ filters, onChange, onClose, resultCount }: FilterP
       {/* Header */}
       <div className="flex items-center justify-between p-4 border-b border-border">
         <div>
-          <h2 className="font-semibold text-sm text-foreground">Filters</h2>
+          {/* Fix 6: use titleId so the dialog's aria-labelledby resolves */}
+          <h2 id={titleId} className="font-semibold text-sm text-foreground">Filters</h2>
           {resultCount !== undefined && (
             <p className="text-xs text-muted-foreground mt-0.5">{resultCount} places found</p>
           )}
@@ -81,7 +93,14 @@ export function FilterPanel({ filters, onChange, onClose, resultCount }: FilterP
             </Button>
           )}
           {onClose && (
-            <Button variant="ghost" size="icon" onClick={onClose} className="h-7 w-7" aria-label="Close filters">
+            <Button
+              ref={closeRef}
+              variant="ghost"
+              size="icon"
+              onClick={onClose}
+              className="h-7 w-7"
+              aria-label="Close filters"
+            >
               <X className="w-4 h-4" />
             </Button>
           )}

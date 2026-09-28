@@ -1,6 +1,8 @@
 import { useQuery } from '@tanstack/react-query'
 import type { FilterState } from '@/types'
-import { fetchPlaces, fetchPlace, searchPlaces, fetchStats } from '@/services/api'
+import { fetchPlaces, fetchPlace, fetchStats } from '@/services/api'
+
+// Fix 14: removed useSearch (was unused — local text search handles this in Explore.tsx)
 
 export function usePlaces(filters?: Partial<FilterState>) {
   return useQuery({
@@ -14,14 +16,6 @@ export function usePlace(id: string) {
     queryKey: ['place', id],
     queryFn: () => fetchPlace(id),
     enabled: Boolean(id),
-  })
-}
-
-export function useSearch(query: string) {
-  return useQuery({
-    queryKey: ['search', query],
-    queryFn: () => searchPlaces(query),
-    enabled: query.length > 1,
   })
 }
 

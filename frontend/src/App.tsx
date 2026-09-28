@@ -1,4 +1,36 @@
 import { BrowserRouter, Routes, Route } from 'react-router-dom'
+import { Layout } from '@/components/layout/Layout'
+import Home from '@/pages/Home'
+import Explore from '@/pages/Explore'
+import PlaceDetails from '@/pages/PlaceDetails'
+import Contribute from '@/pages/Contribute'
+import Guide from '@/pages/Guide'
+import About from '@/pages/About'
+import NotFound from '@/pages/NotFound'
+// import SeedFirestore from '@/pages/SeedFirestore'          // ← ADD THIS LINE
+
+export default function App() {
+  return (
+    <BrowserRouter>
+      <Routes>
+        <Route path="/" element={<Layout><Home /></Layout>} />
+        <Route path="/explore" element={<Layout fullHeight><Explore /></Layout>} />
+        <Route path="/places/:id" element={<Layout><PlaceDetails /></Layout>} />
+        <Route path="/contribute" element={<Layout><Contribute /></Layout>} />
+        <Route path="/guide" element={<Layout><Guide /></Layout>} />
+        <Route path="/about" element={<Layout><About /></Layout>} />
+        {/* <Route path="/seed"       element={<Layout><SeedFirestore /></Layout>} />  */}
+        <Route path="*" element={<Layout><NotFound /></Layout>} />
+      </Routes>
+    </BrowserRouter>
+  )
+}
+
+
+
+
+/*
+import { BrowserRouter, Routes, Route } from 'react-router-dom'
 import { Navbar } from '@/components/layout/Navbar'
 import { Footer } from '@/components/layout/Footer'
 import { Toaster } from '@/components/ui/toaster'
@@ -66,3 +98,4 @@ export default function App() {
     </BrowserRouter>
   )
 }
+*/

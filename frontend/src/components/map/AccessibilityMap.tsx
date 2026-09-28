@@ -6,12 +6,13 @@ import { categoryLabel, getRelativeDate } from '@/lib/utils'
 import { VerificationBadge } from '@/components/verification/VerificationBadge'
 import type { Place } from '@/types'
 
-// Fix leaflet default icon
+// Fix 3: Use local public/ assets instead of CDN URLs.
+// Files are at public/leaflet/*.png, served as /leaflet/*.png at runtime.
 delete (L.Icon.Default.prototype as unknown as Record<string, unknown>)._getIconUrl
 L.Icon.Default.mergeOptions({
-  iconRetinaUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-icon-2x.png',
-  iconUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-icon.png',
-  shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-shadow.png',
+  iconRetinaUrl: '/leaflet/marker-icon-2x.png',
+  iconUrl: '/leaflet/marker-icon.png',
+  shadowUrl: '/leaflet/marker-shadow.png',
 })
 
 function createMarkerIcon(place: Place): L.DivIcon {
@@ -19,12 +20,12 @@ function createMarkerIcon(place: Place): L.DivIcon {
   const hasGoodAccess =
     place.accessibility.wheelchairEntrance === true && place.accessibility.ramp === true
 
-  let color = '#64748b' // muted/unverified
+  let color = '#64748b' // unverified
 
   if (status === 'verified' && hasGoodAccess) color = '#1e7e4c' // green
-  else if (status === 'verified') color = '#1d4ed8' // blue
-  else if (status === 'community-reported') color = '#b45309' // amber
-  else color = '#64748b' // grey
+  else if (status === 'verified') color = '#1d4ed8'             // blue
+  else if (status === 'community-reported') color = '#b45309'   // amber
+  else color = '#64748b'                                         // grey
 
   const svg = `
     <svg xmlns="http://www.w3.org/2000/svg" width="28" height="36" viewBox="0 0 28 36" fill="none">
@@ -42,7 +43,6 @@ function createMarkerIcon(place: Place): L.DivIcon {
   })
 }
 
-// Component to handle map center changes
 function MapController({ center }: { center?: [number, number] }) {
   const map = useMap()
   useEffect(() => {
@@ -61,7 +61,6 @@ interface AccessibilityMapProps {
   onPlaceSelect?: (place: Place) => void
 }
 
-// Chattogram center
 const CHATTOGRAM_CENTER: [number, number] = [22.3569, 91.8349]
 
 export function AccessibilityMap({
@@ -71,7 +70,12 @@ export function AccessibilityMap({
   height = '100%',
 }: AccessibilityMapProps) {
   return (
-    <div style={{ height }} className="w-full rounded-lg overflow-hidden" role="application" aria-label="Accessibility map of Chattogram">
+    <div
+      style={{ height }}
+      className="w-full rounded-lg overflow-hidden"
+      role="application"
+      aria-label="Accessibility map of Chattogram"
+    >
       <MapContainer
         center={center ?? CHATTOGRAM_CENTER}
         zoom={zoom}
