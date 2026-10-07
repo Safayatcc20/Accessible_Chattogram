@@ -150,10 +150,53 @@ export type AccessibilityFeature =
   | 'tactilePaving'
   | 'audioAssistance'
 
+export interface SearchResult {
+  places: Place[]
+  query: string
+  total: number
+}
 
 export interface Stats {
   totalPlaces: number
   totalReports: number
   verifiedPlaces: number
   areasCount: number
+}
+
+// Contribution types — Phase 11A
+// ContributionStatus is the only value the client is permitted to set on create.
+export type ContributionStatus = 'pending' | 'approved' | 'rejected'
+
+// Full Contribution document shape as returned by fetchPendingContributions().
+// Mirrors the Firestore contributions/{id} document, with createdAt
+// converted from Timestamp to ISO string for consistency with the rest of the app.
+export interface Contribution {
+  id: string
+
+  placeName: string
+  category:  PlaceCategory
+  address:   string
+  area:      string
+  phone:     string | null
+  website:   string | null
+  notes:     string | null
+
+  accessibility: {
+    wheelchairEntrance: boolean
+    ramp:               boolean
+    elevator:           boolean
+    accessibleToilet:   boolean
+    accessibleParking:  boolean
+    tactilePaving:      boolean
+    audioAssistance:    boolean
+  }
+
+  reporter: {
+    name:  string | null
+    email: string | null
+  }
+
+  status:     ContributionStatus
+  createdAt:  string        // ISO string converted from Firestore Timestamp
+  reviewedAt: string | null
 }

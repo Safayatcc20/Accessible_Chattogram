@@ -1,0 +1,107 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // places: public read, no client writes
+    // Seeded via the one-time seed page (Phase 8).
+    // Updates only through Firebase Console or a trusted backend process.
+    match /places/{placeId} {
+      allow read:  if true;
+      allow write: if false;
+    }
+
+    // contributions: write-only from the client
+    // Created by the Contribute form via submitPlace() (Phase 11A).
+    // No client may read, update, or delete a contribution after creation.
+    // A backend/admin process promotes approved contributions to places.
+    match /contributions/{contributionId} {
+      allow read:   if false;
+      allow update: if false;
+      allow delete: if false;
+
+      allow create: if
+        // Top-level shape: reject unexpected fields
+        request.resource.data.keys().hasOnly([
+          'placeName', 'category', 'address', 'area',
+          'phone', 'website',
+          'accessibility', 'notes',
+          'reporter',
+          'status', 'createdAt', 'reviewedAt'
+        ]) &&
+        // All required top-level fields must be present
+        request.resource.data.keys().hasAll([
+          'placeName', 'category', 'address', 'area',
+          'accessibility', 'notes',
+          'reporter',
+          'status', 'createdAt', 'reviewedAt'
+        ]) &&
+
+        // Required string fields with minimum lengths
+        request.resource.data.placeName is string &&
+        request.resource.data.placeName.size() >= 2 &&
+
+        request.resource.data.address is string &&
+        request.resource.data.address.size() >= 5 &&
+
+        request.resource.data.area is string &&
+        request.resource.data.area.size() >= 2 &&
+
+        // Category: one of the eight supported values
+        request.resource.data.category in [
+          'hospital', 'university', 'school', 'restaurant',
+          'shopping', 'government', 'transport', 'other'
+        ] &&
+
+        // Optional contact fields: string or null
+        (request.resource.data.phone   is string || request.resource.data.phone   == null) &&
+        (request.resource.data.website is string || request.resource.data.website == null) &&
+        (request.resource.data.notes   is string || request.resource.data.notes   == null) &&
+
+        // Accessibility map: exact keys, all booleans
+        request.resource.data.accessibility is map &&
+        request.resource.data.accessibility.keys().hasOnly([
+          'wheelchairEntrance', 'ramp', 'elevator',
+          'accessibleToilet', 'accessibleParking',
+          'tactilePaving', 'audioAssistance'
+        ]) &&
+        request.resource.data.accessibility.keys().hasAll([
+          'wheelchairEntrance', 'ramp', 'elevator',
+          'accessibleToilet', 'accessibleParking',
+          'tactilePaving', 'audioAssistance'
+        ]) &&
+        request.resource.data.accessibility.wheelchairEntrance is bool &&
+        request.resource.data.accessibility.ramp               is bool &&
+        request.resource.data.accessibility.elevator           is bool &&
+        request.resource.data.accessibility.accessibleToilet   is bool &&
+        request.resource.data.accessibility.accessibleParking  is bool &&
+        request.resource.data.accessibility.tactilePaving      is bool &&
+        request.resource.data.accessibility.audioAssistance    is bool &&
+
+        // Reporter map: exact keys, string or null values
+        request.resource.data.reporter is map &&
+        request.resource.data.reporter.keys().hasOnly(['name', 'email']) &&
+        request.resource.data.reporter.keys().hasAll(['name', 'email']) &&
+        (request.resource.data.reporter.name  is string ||
+         request.resource.data.reporter.name  == null) &&
+        (request.resource.data.reporter.email is string ||
+         request.resource.data.reporter.email == null) &&
+
+        // Status: client may only ever submit 'pending'
+        request.resource.data.status == 'pending' &&
+
+        // createdAt: must equal the server request timestamp (prevents backdating)
+        request.resource.data.createdAt == request.time &&
+
+        // reviewedAt: must be null on create
+        // Only a backend/admin process may set this after review
+        request.resource.data.reviewedAt == null;
+    }
+
+    // All other collections: deny everything
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+  }
+}

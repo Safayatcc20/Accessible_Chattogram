@@ -1,5 +1,6 @@
 import { BrowserRouter, Routes, Route } from 'react-router-dom'
 import { Layout } from '@/components/layout/Layout'
+import { AdminGuard } from '@/components/layout/AdminGuard'
 import Home from '@/pages/Home'
 import Explore from '@/pages/Explore'
 import PlaceDetails from '@/pages/PlaceDetails'
@@ -7,19 +8,37 @@ import Contribute from '@/pages/Contribute'
 import Guide from '@/pages/Guide'
 import About from '@/pages/About'
 import NotFound from '@/pages/NotFound'
-// import SeedFirestore from '@/pages/SeedFirestore'          // ← ADD THIS LINE
+import AdminLogin from '@/pages/AdminLogin'
+import AdminDashboard from '@/pages/AdminDashboard'
 
 export default function App() {
   return (
     <BrowserRouter>
       <Routes>
-        <Route path="/" element={<Layout><Home /></Layout>} />
-        <Route path="/explore" element={<Layout fullHeight><Explore /></Layout>} />
+        {/* Public routes */}
+        <Route path="/"           element={<Layout><Home /></Layout>} />
+        <Route path="/explore"    element={<Layout fullHeight><Explore /></Layout>} />
         <Route path="/places/:id" element={<Layout><PlaceDetails /></Layout>} />
         <Route path="/contribute" element={<Layout><Contribute /></Layout>} />
-        <Route path="/guide" element={<Layout><Guide /></Layout>} />
-        <Route path="/about" element={<Layout><About /></Layout>} />
-        {/* <Route path="/seed"       element={<Layout><SeedFirestore /></Layout>} />  */}
+        <Route path="/guide"      element={<Layout><Guide /></Layout>} />
+        <Route path="/about"      element={<Layout><About /></Layout>} />
+
+        {/* Admin routes — login is public, dashboard requires AdminGuard */}
+        <Route
+          path="/admin/login"
+          element={<Layout><AdminLogin /></Layout>}
+        />
+        <Route
+          path="/admin"
+          element={
+            <Layout>
+              <AdminGuard>
+                <AdminDashboard />
+              </AdminGuard>
+            </Layout>
+          }
+        />
+
         <Route path="*" element={<Layout><NotFound /></Layout>} />
       </Routes>
     </BrowserRouter>

@@ -1,5 +1,6 @@
 import { initializeApp, type FirebaseApp } from 'firebase/app'
 import { getFirestore, type Firestore } from 'firebase/firestore'
+import { getAuth } from 'firebase/auth'
 
 // ---------------------------------------------------------------------------
 // Environment variable validation
@@ -50,3 +51,5 @@ export const app: FirebaseApp = initializeApp(firebaseConfig)
 
 // Firestore database instance — used by future service functions in api.ts
 export const db: Firestore = getFirestore(app)
+
+export const auth = getAuth(app)
