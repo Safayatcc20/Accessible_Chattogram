@@ -441,6 +441,48 @@
  *   searchPlaces() — client-side mock (no search index yet)
  */
 
+/**
+ * API service layer — Phase 9: connected to Firestore.
+ *
+ * PUBLIC INTERFACE IS UNCHANGED. All existing hooks, pages, and components
+ * continue to work without modification.
+ *
+ * Data flow:
+ *   Firestore `places` collection  →  fromFirestore()  →  Place
+ *
+ * What is live (Firestore):
+ *   fetchPlaces()  — reads `places` collection, filters client-side
+ *   fetchPlace()   — reads single `places/{id}` document
+ *
+ * What is still mocked (no Firestore data yet):
+ *   fetchStats()   — calculated from places collection (totalPlaces, verifiedPlaces, areasCount, totalReports)
+ *   verifyPlace()  — mock stub
+ *   submitPlace()  — writes to `contributions` collection (Phase 11A)
+ *   submitReport() — mock stub
+ *   searchPlaces() — client-side mock (no search index yet)
+ */
+
+/**
+ * API service layer — Phase 9: connected to Firestore.
+ *
+ * PUBLIC INTERFACE IS UNCHANGED. All existing hooks, pages, and components
+ * continue to work without modification.
+ *
+ * Data flow:
+ *   Firestore `places` collection  →  fromFirestore()  →  Place
+ *
+ * What is live (Firestore):
+ *   fetchPlaces()  — reads `places` collection, filters client-side
+ *   fetchPlace()   — reads single `places/{id}` document
+ *
+ * What is still mocked (no Firestore data yet):
+ *   fetchStats()   — calculated from places collection (totalPlaces, verifiedPlaces, areasCount, totalReports)
+ *   verifyPlace()  — mock stub
+ *   submitPlace()  — writes to `contributions` collection (Phase 11A)
+ *   submitReport() — mock stub
+ *   searchPlaces() — client-side mock (no search index yet)
+ */
+
 import {
   addDoc,
   collection,
@@ -452,6 +494,7 @@ import {
   where,
   Timestamp,
   serverTimestamp,
+  runTransaction,
 } from 'firebase/firestore'
 import { db } from '@/lib/firebase'
 // MOCK_STATS import removed in Phase 10 — stats now calculated from Firestore
@@ -634,9 +677,9 @@ export async function fetchPlace(id: string): Promise<Place | null> {
 }
 
 // GET /api/places/search — client-side over Firestore data
-export async function searchPlaces(query: string): Promise<SearchResult> {
-  const q = query.toLowerCase().trim()
-  if (!q) return { places: [], query, total: 0 }
+export async function searchPlaces(searchQuery: string): Promise<SearchResult> {
+  const q = searchQuery.toLowerCase().trim()
+  if (!q) return { places: [], query: searchQuery, total: 0 }
 
   const snap   = await getDocs(collection(db, 'places'))
   const places = snap.docs
@@ -649,7 +692,7 @@ export async function searchPlaces(query: string): Promise<SearchResult> {
       (p.description?.toLowerCase().includes(q) ?? false)
     )
 
-  return { places, query, total: places.length }
+  return { places, query: searchQuery, total: places.length }
 }
 
 // GET /api/stats — Phase 10: calculated from Firestore places collection
@@ -717,6 +760,132 @@ export async function fetchPendingContributions(): Promise<Contribution[]> {
       createdAt:  ts ? ts.toDate().toISOString() : new Date().toISOString(),
       reviewedAt: null,
     } satisfies Contribution
+  })
+}
+
+// ─── Admin moderation actions ─────────────────────────────────────────────────
+
+/**
+ * Approve a pending contribution.
+ *
+ * Uses a Firestore transaction to:
+ *   1. Verify the contribution still has status === 'pending' (prevents double-approve).
+ *   2. Create a new document in `places` with the provided coordinates.
+ *   3. Update the contribution status to 'approved' and set reviewedAt.
+ *
+ * Throws if the contribution is not found, already reviewed, or the caller
+ * lacks admin permissions (Firestore rules enforce this server-side).
+ *
+ * @param contributionId  Firestore document ID of the contribution
+ * @param latitude        Validated latitude  (-90  … 90)
+ * @param longitude       Validated longitude (-180 … 180)
+ */
+export async function approveContribution(
+  contributionId: string,
+  latitude: number,
+  longitude: number,
+): Promise<void> {
+  const contributionRef = doc(db, 'contributions', contributionId)
+  const newPlaceRef     = doc(collection(db, 'places'))   // auto-id, created inside transaction
+
+  await runTransaction(db, async (tx) => {
+    const snap = await tx.get(contributionRef)
+
+    if (!snap.exists()) {
+      throw new Error('contribution-not-found')
+    }
+
+    const data = snap.data()
+
+    if (data.status !== 'pending') {
+      throw new Error('contribution-already-reviewed')
+    }
+
+    // Build the place document — follows FirestorePlace shape exactly.
+    // Optional fields the contribution doesn't carry are set to null.
+    const placeDoc = {
+      name:         data.placeName as string,
+      category:     data.category  as string,
+      address:      data.address   as string,
+      area:         data.area      as string,
+      description:  null,
+      phone:        (data.phone    as string | null) ?? null,
+      website:      (data.website  as string | null) ?? null,
+      openingHours: null,
+      latitude,
+      longitude,
+      isOpenNow:    null,
+
+      accessibility: {
+        wheelchairEntrance: Boolean(data.accessibility?.wheelchairEntrance),
+        ramp:               Boolean(data.accessibility?.ramp),
+        elevator:           Boolean(data.accessibility?.elevator),
+        accessibleToilet:   Boolean(data.accessibility?.accessibleToilet),
+        accessibleParking:  Boolean(data.accessibility?.accessibleParking),
+        tactilePaving:      Boolean(data.accessibility?.tactilePaving),
+        audioAssistance:    Boolean(data.accessibility?.audioAssistance),
+        // Extended fields not collected in the contribution form
+        accessiblePathways: null,
+        doorWidth:          null,
+        entranceSurface:    null,
+        elevatorNotes:      null,
+        restroomNotes:      null,
+        parkingDistance:    null,
+      },
+
+      verification: {
+        status:            'community-reported' as VerificationStatus,
+        lastVerified:      null,
+        verificationCount: 0,
+        communityReports:  1,
+        source:            'community',
+      },
+
+      createdAt:  serverTimestamp(),
+      updatedAt:  serverTimestamp(),
+    }
+
+    tx.set(newPlaceRef, placeDoc)
+    tx.update(contributionRef, {
+      status:     'approved' satisfies ContributionStatus,
+      reviewedAt: serverTimestamp(),
+    })
+  })
+}
+
+/**
+ * Reject a pending contribution.
+ *
+ * Uses runTransaction so the pending-status check and the status update are
+ * atomic. Concurrent approve + reject operations cannot silently overwrite
+ * each other: whichever transaction commits second will re-read the already-
+ * updated status and throw 'contribution-already-reviewed'.
+ *
+ * No place document is created on rejection.
+ *
+ * Throws if the contribution is not found, already reviewed, or the caller
+ * lacks admin permissions (Firestore rules enforce this server-side).
+ *
+ * @param contributionId  Firestore document ID of the contribution
+ */
+export async function rejectContribution(contributionId: string): Promise<void> {
+  const contributionRef = doc(db, 'contributions', contributionId)
+
+  await runTransaction(db, async (tx) => {
+    const snap = await tx.get(contributionRef)
+
+    if (!snap.exists()) {
+      throw new Error('contribution-not-found')
+    }
+
+    if (snap.data().status !== 'pending') {
+      throw new Error('contribution-already-reviewed')
+    }
+
+    tx.update(contributionRef, {
+      status:     'rejected' satisfies ContributionStatus,
+      reviewedAt: serverTimestamp(),
+    })
   })
 }
 

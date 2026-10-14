@@ -361,7 +361,7 @@ const contributeSchema = z.object({
   category: z.string().min(1, 'Please select a category'),
   address: z.string().min(5, 'Address must be at least 5 characters'),
   area: z.string().min(2, 'Area is required'),
-  phone: z.string().optional(),
+  phone: z.string().max(30, 'Phone number must be 30 characters or fewer').optional(),
   website: z.string().url('Must be a valid URL').optional().or(z.literal('')),
   wheelchairEntrance: z.boolean().optional(),
   ramp: z.boolean().optional(),

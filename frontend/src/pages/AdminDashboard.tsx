@@ -3,23 +3,43 @@
  *
  * Protected admin area. Displays pending contributions from Firestore.
  * Only reachable after passing AdminGuard (auth + admins/{uid} check).
- * Approve / reject actions will be added in the next phase.
+ *
+ * Approve: opens a dialog to enter latitude/longitude, then atomically
+ *   creates a place document and marks the contribution as approved.
+ * Reject: shows a confirmation dialog, then marks the contribution as rejected.
  */
 
+import { useState } from 'react'
 import { signOut } from 'firebase/auth'
 import { useNavigate } from 'react-router-dom'
 import {
   Shield, LogOut, AlertCircle, Inbox,
   CheckCircle2, XCircle, Phone, Globe,
   MapPin, User, Mail, FileText, Loader2,
+  Check, X,
 } from 'lucide-react'
 import { auth } from '@/lib/firebase'
-import { Button } from '@/components/ui/button'
-import { Badge } from '@/components/ui/badge'
-import { Skeleton } from '@/components/ui/skeleton'
+import { Button }    from '@/components/ui/button'
+import { Badge }     from '@/components/ui/badge'
+import { Skeleton }  from '@/components/ui/skeleton'
 import { Separator } from '@/components/ui/separator'
-import { useAdminAuth } from '@/hooks/useAdminAuth'
-import { usePendingContributions } from '@/hooks/useContributions'
+import { Input }     from '@/components/ui/input'
+import { Label }     from '@/components/ui/label'
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+  DialogFooter,
+} from '@/components/ui/dialog'
+import { useToast }  from '@/hooks/use-toast'
+import { useAdminAuth }            from '@/hooks/useAdminAuth'
+import {
+  usePendingContributions,
+  useApproveContribution,
+  useRejectContribution,
+} from '@/hooks/useContributions'
 import { categoryLabel, getRelativeDate } from '@/lib/utils'
 import type { Contribution } from '@/types'
 
@@ -35,9 +55,304 @@ const ACCESSIBILITY_LABELS: Record<keyof Contribution['accessibility'], string> 
   audioAssistance:    'Audio Assistance',
 }
 
-// ─── sub-components ──────────────────────────────────────────────────────────
+/**
+ * Translate a Firestore error code or our own sentinel string into a
+ * user-facing message.
+ */
+function describeError(error: unknown): string {
+  const msg  = (error as Error)?.message ?? ''
+  const code = (error as { code?: string })?.code ?? ''
 
-function ContributionCard({ c }: { c: Contribution }) {
+  if (msg === 'contribution-not-found')      return 'This contribution no longer exists.'
+  if (msg === 'contribution-already-reviewed') return 'This contribution was already approved or rejected.'
+  if (code === 'permission-denied')          return 'Permission denied. Make sure you are signed in as an admin.'
+  if (code === 'failed-precondition')        return 'A required Firestore index is missing. Check the browser console.'
+  return 'An unexpected error occurred. Check the browser console for details.'
+}
+
+// ─── Approve dialog ───────────────────────────────────────────────────────────
+
+interface ApproveDialogProps {
+  contribution: Contribution | null
+  onClose: () => void
+}
+
+function ApproveDialog({ contribution, onClose }: ApproveDialogProps) {
+  const { toast }  = useToast()
+  const approveMut = useApproveContribution()
+
+  const [latStr, setLatStr] = useState('')
+  const [lngStr, setLngStr] = useState('')
+  const [fieldErrors, setFieldErrors] = useState<{ lat?: string; lng?: string }>({})
+
+  const isOpen    = contribution !== null
+  const isPending = approveMut.isPending
+
+  // Reset local state when the dialog is closed/reopened
+  const handleOpenChange = (open: boolean) => {
+    if (!open) {
+      setLatStr('')
+      setLngStr('')
+      setFieldErrors({})
+      approveMut.reset()
+      onClose()
+    }
+  }
+
+  const validate = (): { lat: number; lng: number } | null => {
+    const errors: { lat?: string; lng?: string } = {}
+
+    const lat = parseFloat(latStr.trim())
+    const lng = parseFloat(lngStr.trim())
+
+    if (latStr.trim() === '' || isNaN(lat)) {
+      errors.lat = 'Enter a valid number.'
+    } else if (lat < -90 || lat > 90) {
+      errors.lat = 'Latitude must be between -90 and 90.'
+    }
+
+    if (lngStr.trim() === '' || isNaN(lng)) {
+      errors.lng = 'Enter a valid number.'
+    } else if (lng < -180 || lng > 180) {
+      errors.lng = 'Longitude must be between -180 and 180.'
+    }
+
+    setFieldErrors(errors)
+    if (Object.keys(errors).length > 0) return null
+    return { lat, lng }
+  }
+
+  const handleApprove = async () => {
+    if (!contribution) return
+    const coords = validate()
+    if (!coords) return
+
+    try {
+      await approveMut.mutateAsync({
+        contributionId: contribution.id,
+        latitude:       coords.lat,
+        longitude:      coords.lng,
+      })
+      toast({
+        title:       'Contribution approved',
+        description: `"${contribution.placeName}" has been added to the map.`,
+      })
+      handleOpenChange(false)
+    } catch (err) {
+      // Error is shown inside the dialog via approveMut.error
+      console.error('[AdminDashboard] approve failed:', err)
+    }
+  }
+
+  return (
+    <Dialog open={isOpen} onOpenChange={handleOpenChange}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>Approve contribution</DialogTitle>
+          <DialogDescription>
+            Enter the coordinates for{' '}
+            <span className="font-medium text-foreground">
+              {contribution?.placeName}
+            </span>
+            . These are required to place it on the map.
+          </DialogDescription>
+        </DialogHeader>
+
+        <div className="space-y-4 py-2">
+          {/* Latitude */}
+          <div className="space-y-1.5">
+            <Label htmlFor="approve-lat">
+              Latitude <span aria-hidden="true" className="text-destructive">*</span>
+            </Label>
+            <Input
+              id="approve-lat"
+              type="number"
+              step="any"
+              placeholder="e.g. 22.3569"
+              value={latStr}
+              onChange={e => {
+                setLatStr(e.target.value)
+                setFieldErrors(prev => ({ ...prev, lat: undefined }))
+              }}
+              disabled={isPending}
+              aria-invalid={Boolean(fieldErrors.lat)}
+              aria-describedby={fieldErrors.lat ? 'approve-lat-error' : undefined}
+            />
+            {fieldErrors.lat && (
+              <p id="approve-lat-error" className="text-xs text-destructive" role="alert">
+                {fieldErrors.lat}
+              </p>
+            )}
+          </div>
+
+          {/* Longitude */}
+          <div className="space-y-1.5">
+            <Label htmlFor="approve-lng">
+              Longitude <span aria-hidden="true" className="text-destructive">*</span>
+            </Label>
+            <Input
+              id="approve-lng"
+              type="number"
+              step="any"
+              placeholder="e.g. 91.8123"
+              value={lngStr}
+              onChange={e => {
+                setLngStr(e.target.value)
+                setFieldErrors(prev => ({ ...prev, lng: undefined }))
+              }}
+              disabled={isPending}
+              aria-invalid={Boolean(fieldErrors.lng)}
+              aria-describedby={fieldErrors.lng ? 'approve-lng-error' : undefined}
+            />
+            {fieldErrors.lng && (
+              <p id="approve-lng-error" className="text-xs text-destructive" role="alert">
+                {fieldErrors.lng}
+              </p>
+            )}
+          </div>
+
+          {/* Firestore error */}
+          {approveMut.isError && (
+            <div className="flex items-start gap-2 rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2">
+              <AlertCircle className="w-4 h-4 text-destructive shrink-0 mt-0.5" aria-hidden="true" />
+              <p className="text-xs text-destructive" role="alert">
+                {describeError(approveMut.error)}
+              </p>
+            </div>
+          )}
+        </div>
+
+        <DialogFooter className="gap-2">
+          <Button
+            variant="outline"
+            onClick={() => handleOpenChange(false)}
+            disabled={isPending}
+          >
+            Cancel
+          </Button>
+          <Button
+            onClick={() => void handleApprove()}
+            disabled={isPending}
+            className="gap-1.5"
+          >
+            {isPending ? (
+              <>
+                <Loader2 className="w-3.5 h-3.5 animate-spin" aria-hidden="true" />
+                Approving…
+              </>
+            ) : (
+              <>
+                <Check className="w-3.5 h-3.5" aria-hidden="true" />
+                Approve
+              </>
+            )}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+// ─── Reject dialog ────────────────────────────────────────────────────────────
+
+interface RejectDialogProps {
+  contribution: Contribution | null
+  onClose: () => void
+}
+
+function RejectDialog({ contribution, onClose }: RejectDialogProps) {
+  const { toast } = useToast()
+  const rejectMut = useRejectContribution()
+
+  const isOpen    = contribution !== null
+  const isPending = rejectMut.isPending
+
+  const handleOpenChange = (open: boolean) => {
+    if (!open) {
+      rejectMut.reset()
+      onClose()
+    }
+  }
+
+  const handleReject = async () => {
+    if (!contribution) return
+    try {
+      await rejectMut.mutateAsync({ contributionId: contribution.id })
+      toast({
+        title:       'Contribution rejected',
+        description: `"${contribution.placeName}" has been marked as rejected.`,
+      })
+      handleOpenChange(false)
+    } catch (err) {
+      console.error('[AdminDashboard] reject failed:', err)
+    }
+  }
+
+  return (
+    <Dialog open={isOpen} onOpenChange={handleOpenChange}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>Reject contribution?</DialogTitle>
+          <DialogDescription>
+            This will mark{' '}
+            <span className="font-medium text-foreground">
+              {contribution?.placeName}
+            </span>{' '}
+            as rejected. No place will be added to the map. This action cannot be undone from the app.
+          </DialogDescription>
+        </DialogHeader>
+
+        {/* Firestore error */}
+        {rejectMut.isError && (
+          <div className="flex items-start gap-2 rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 mt-2">
+            <AlertCircle className="w-4 h-4 text-destructive shrink-0 mt-0.5" aria-hidden="true" />
+            <p className="text-xs text-destructive" role="alert">
+              {describeError(rejectMut.error)}
+            </p>
+          </div>
+        )}
+
+        <DialogFooter className="gap-2 mt-2">
+          <Button
+            variant="outline"
+            onClick={() => handleOpenChange(false)}
+            disabled={isPending}
+          >
+            Cancel
+          </Button>
+          <Button
+            variant="destructive"
+            onClick={() => void handleReject()}
+            disabled={isPending}
+            className="gap-1.5"
+          >
+            {isPending ? (
+              <>
+                <Loader2 className="w-3.5 h-3.5 animate-spin" aria-hidden="true" />
+                Rejecting…
+              </>
+            ) : (
+              <>
+                <X className="w-3.5 h-3.5" aria-hidden="true" />
+                Reject
+              </>
+            )}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+// ─── ContributionCard ─────────────────────────────────────────────────────────
+
+interface ContributionCardProps {
+  c: Contribution
+  onApprove: (c: Contribution) => void
+  onReject:  (c: Contribution) => void
+}
+
+function ContributionCard({ c, onApprove, onReject }: ContributionCardProps) {
   const accessibilityEntries = Object.entries(c.accessibility) as [
     keyof Contribution['accessibility'],
     boolean,
@@ -116,7 +431,7 @@ function ContributionCard({ c }: { c: Contribution }) {
           </p>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
             {accessibilityEntries.map(([key, value]) => (
-              <div key={key} className="flex items-center gap-2 text-sm">
+              <div key={key as string} className="flex items-center gap-2 text-sm">
                 {value ? (
                   <CheckCircle2
                     className="w-4 h-4 text-accent shrink-0"
@@ -176,17 +491,25 @@ function ContributionCard({ c }: { c: Contribution }) {
           </span>
         </div>
 
-        {/* Approve / Reject — placeholder, next phase */}
+        {/* Action buttons */}
         <div className="flex gap-2 pt-1">
-          <Button size="sm" disabled className="gap-1.5 opacity-50 cursor-not-allowed">
+          <Button
+            size="sm"
+            className="gap-1.5"
+            onClick={() => onApprove(c)}
+          >
+            <Check className="w-3.5 h-3.5" aria-hidden="true" />
             Approve
           </Button>
-          <Button size="sm" variant="outline" disabled className="gap-1.5 opacity-50 cursor-not-allowed">
+          <Button
+            size="sm"
+            variant="outline"
+            className="gap-1.5 text-destructive hover:text-destructive hover:bg-destructive/10 border-destructive/30"
+            onClick={() => onReject(c)}
+          >
+            <X className="w-3.5 h-3.5" aria-hidden="true" />
             Reject
           </Button>
-          <span className="text-xs text-muted-foreground self-center ml-1">
-            Actions coming soon
-          </span>
         </div>
       </div>
     </article>
@@ -196,9 +519,13 @@ function ContributionCard({ c }: { c: Contribution }) {
 // ─── main page ───────────────────────────────────────────────────────────────
 
 export default function AdminDashboard() {
-  const authState    = useAdminAuth()
-  const navigate     = useNavigate()
-  const { data: contributions, isLoading, isError } = usePendingContributions()
+  const authState = useAdminAuth()
+  const navigate  = useNavigate()
+  const { data: contributions, isLoading, isError, error } = usePendingContributions()
+
+  // Which contribution is currently being acted on
+  const [approveTarget, setApproveTarget] = useState<Contribution | null>(null)
+  const [rejectTarget,  setRejectTarget]  = useState<Contribution | null>(null)
 
   const handleSignOut = async () => {
     await signOut(auth)
@@ -231,7 +558,7 @@ export default function AdminDashboard() {
         <Button
           variant="outline"
           size="sm"
-          onClick={handleSignOut}
+          onClick={() => void handleSignOut()}
           className="gap-1.5 shrink-0"
         >
           <LogOut className="w-3.5 h-3.5" aria-hidden="true" />
@@ -284,9 +611,18 @@ export default function AdminDashboard() {
             <p className="text-sm font-medium text-foreground mb-1">
               Failed to load contributions
             </p>
-            <p className="text-xs text-muted-foreground">
-              This may be a permissions issue or a network error. Try refreshing the page.
+            <p className="text-xs text-muted-foreground mb-1">
+              {(error as { code?: string })?.code === 'failed-precondition'
+                ? 'A Firestore composite index is required. See the project README or check the browser console for the index creation link.'
+                : (error as { code?: string })?.code === 'permission-denied'
+                ? 'Permission denied. Make sure you are signed in as an admin.'
+                : 'A network or configuration error occurred. Check the browser console for details.'}
             </p>
+            {(error as { code?: string })?.code && (
+              <p className="text-xs font-mono text-muted-foreground/70">
+                Error code: {(error as { code?: string }).code}
+              </p>
+            )}
           </div>
         </div>
       )}
@@ -312,7 +648,11 @@ export default function AdminDashboard() {
         <div className="space-y-4" role="list" aria-label="Pending contributions">
           {contributions.map(c => (
             <div key={c.id} role="listitem">
-              <ContributionCard c={c} />
+              <ContributionCard
+                c={c}
+                onApprove={setApproveTarget}
+                onReject={setRejectTarget}
+              />
             </div>
           ))}
         </div>
@@ -324,6 +664,16 @@ export default function AdminDashboard() {
           <Loader2 className="w-4 h-4 text-muted-foreground/30 animate-spin" aria-hidden="true" />
         </div>
       )}
+
+      {/* Dialogs — rendered once at page level, not per-card */}
+      <ApproveDialog
+        contribution={approveTarget}
+        onClose={() => setApproveTarget(null)}
+      />
+      <RejectDialog
+        contribution={rejectTarget}
+        onClose={() => setRejectTarget(null)}
+      />
     </main>
   )
 }
