@@ -1,0 +1,188 @@
+
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Helper: returns true only if the caller is a recognized admin.
+    // Checks both Firebase Authentication AND existence of admins/{uid}.
+    function isAdmin() {
+      return request.auth != null
+        && exists(/databases/$(database)/documents/admins/$(request.auth.uid));
+    }
+
+    // Published places: publicly readable, admin writes only.
+    match /places/{placeId} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    // New place submissions: create-only for public (with strict validation),
+    // read and update for admins only, delete by nobody.
+    match /contributions/{contributionId} {
+
+      // allow read, update: if isAdmin();
+      // allow delete: if false;
+      allow read: if isAdmin();
+      allow update: if isAdmin()
+        && resource.data.status == 'pending'
+        && request.resource.data.diff(resource.data).affectedKeys()
+          .hasOnly(['status', 'reviewedAt'])
+        
+        && request.resource.data.diff(resource.data).affectedKeys()
+          .hasAll(['status', 'reviewedAt'])
+        && request.resource.data.status in ['approved', 'rejected']
+        && request.resource.data.reviewedAt == request.time;
+      allow delete: if false;
+
+      allow create: if
+        request.resource.data.keys().hasOnly([
+          'placeName',
+          'category',
+          'address',
+          'area',
+          'phone',
+          'website',
+          'accessibility',
+          'notes',
+          'reporter',
+          'status',
+          'createdAt',
+          'reviewedAt'
+        ]) &&
+
+        request.resource.data.keys().hasAll([
+          'placeName',
+          'category',
+          'address',
+          'area',
+          'phone',
+          'website',
+          'accessibility',
+          'notes',
+          'reporter',
+          'status',
+          'createdAt',
+          'reviewedAt'
+        ]) &&
+
+        request.resource.data.placeName is string &&
+        request.resource.data.placeName.size() >= 2 &&
+        request.resource.data.placeName.size() <= 150 &&
+
+        request.resource.data.address is string &&
+        request.resource.data.address.size() >= 5 &&
+        request.resource.data.address.size() <= 300 &&
+
+        request.resource.data.area is string &&
+        request.resource.data.area.size() >= 2 &&
+        request.resource.data.area.size() <= 100 &&
+
+        request.resource.data.category in [
+          'hospital',
+          'university',
+          'school',
+          'restaurant',
+          'shopping',
+          'government',
+          'transport',
+          'other'
+        ] &&
+
+        (
+          request.resource.data.phone == null ||
+          (
+            request.resource.data.phone is string &&
+            request.resource.data.phone.size() <= 30
+          )
+        ) &&
+
+        (
+          request.resource.data.website == null ||
+          (
+            request.resource.data.website is string &&
+            request.resource.data.website.size() <= 2048
+          )
+        ) &&
+
+        (
+          request.resource.data.notes == null ||
+          (
+            request.resource.data.notes is string &&
+            request.resource.data.notes.size() <= 2000
+          )
+        ) &&
+
+        request.resource.data.accessibility is map &&
+        request.resource.data.accessibility.keys().hasOnly([
+          'wheelchairEntrance',
+          'ramp',
+          'elevator',
+          'accessibleToilet',
+          'accessibleParking',
+          'tactilePaving',
+          'audioAssistance'
+        ]) &&
+        request.resource.data.accessibility.keys().hasAll([
+          'wheelchairEntrance',
+          'ramp',
+          'elevator',
+          'accessibleToilet',
+          'accessibleParking',
+          'tactilePaving',
+          'audioAssistance'
+        ]) &&
+
+        request.resource.data.accessibility.wheelchairEntrance is bool &&
+        request.resource.data.accessibility.ramp is bool &&
+        request.resource.data.accessibility.elevator is bool &&
+        request.resource.data.accessibility.accessibleToilet is bool &&
+        request.resource.data.accessibility.accessibleParking is bool &&
+        request.resource.data.accessibility.tactilePaving is bool &&
+        request.resource.data.accessibility.audioAssistance is bool &&
+
+        request.resource.data.reporter is map &&
+        request.resource.data.reporter.keys().hasOnly([
+          'name',
+          'email'
+        ]) &&
+        request.resource.data.reporter.keys().hasAll([
+          'name',
+          'email'
+        ]) &&
+
+        (
+          request.resource.data.reporter.name == null ||
+          (
+            request.resource.data.reporter.name is string &&
+            request.resource.data.reporter.name.size() <= 100
+          )
+        ) &&
+
+        (
+          request.resource.data.reporter.email == null ||
+          (
+            request.resource.data.reporter.email is string &&
+            request.resource.data.reporter.email.size() <= 254
+          )
+        ) &&
+
+        request.resource.data.status == 'pending' &&
+        request.resource.data.createdAt == request.time &&
+        request.resource.data.reviewedAt == null;
+    }
+
+    // Admins: each admin can read only their own record.
+    // Writes are prohibited from the client -- use Firebase Console only.
+    match /admins/{uid} {
+      allow read: if request.auth != null && request.auth.uid == uid;
+      allow write: if false;
+    }
+
+    // All other collections remain inaccessible to client requests.
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+  }
+}

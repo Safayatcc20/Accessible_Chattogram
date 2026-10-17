@@ -780,6 +780,26 @@ export async function fetchPendingContributions(): Promise<Contribution[]> {
  * @param latitude        Validated latitude  (-90  … 90)
  * @param longitude       Validated longitude (-180 … 180)
  */
+/**
+ * Validate that a coordinate value is a finite number within the given range.
+ * Rejects NaN, Infinity, -Infinity, and out-of-range values.
+ * Throws with a clear, UI-displayable message on failure.
+ */
+function assertCoordinate(
+  value: number,
+  name: 'Latitude' | 'Longitude',
+  min: number,
+  max: number,
+): void {
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    throw new Error(`invalid-coordinates: ${name} must be a finite number, got ${value}.`)
+  }
+  if (value < min || value > max) {
+    throw new Error(
+      `invalid-coordinates: ${name} must be between ${min} and ${max}, got ${value}.`
+    )
+  }
+}
 export async function approveContribution(
   contributionId: string,
   latitude: number,
@@ -787,7 +807,10 @@ export async function approveContribution(
 ): Promise<void> {
   const contributionRef = doc(db, 'contributions', contributionId)
   const newPlaceRef     = doc(collection(db, 'places'))   // auto-id, created inside transaction
-
+    // Validate before opening a Firestore transaction — nothing is written if
+  // either coordinate is invalid.
+  assertCoordinate(latitude,  'Latitude',  -90,  90)
+  assertCoordinate(longitude, 'Longitude', -180, 180)
   await runTransaction(db, async (tx) => {
     const snap = await tx.get(contributionRef)
 
