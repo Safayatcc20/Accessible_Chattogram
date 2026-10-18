@@ -10,6 +10,8 @@
 //   website?: string
 //   openingHours?: string
 
+
+
 //   accessibility: {
 //     wheelchairEntrance: boolean | null
 //     ramp: boolean | null
@@ -114,6 +116,8 @@ export interface Place {
     verificationCount: number
     communityReports: number
     source: string
+    verifiedAt?: string | null
+    verifiedBy?: string | null
   }
 
   isOpenNow?: boolean
@@ -130,7 +134,7 @@ export type PlaceCategory =
   | 'transport'
   | 'other'
 
-export type VerificationStatus = 'verified' | 'community-reported' | 'unverified'
+export type VerificationStatus = 'verified' | 'community-reported' | 'unverified' | 'admin-verified'
 
 export interface FilterState {
   categories: PlaceCategory[]

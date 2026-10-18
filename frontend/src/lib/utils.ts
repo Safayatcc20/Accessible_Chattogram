@@ -120,10 +120,29 @@ export function verificationLabel(status: VerificationStatus): string {
   const labels: Record<VerificationStatus, string> = {
     verified: 'Verified',
     'community-reported': 'Community Reported',
-    unverified: 'Not Verified',
+    unverified: 'Not Verified','admin-verified':'admin-verified',
   }
   return labels[status]
 }
 
 // Fix 14: accessibilityScore removed — was defined but never used anywhere in the UI.
 // Restore when a score indicator is added to PlaceCard or PlaceDetails.
+
+export function verificationDescription(
+  status: VerificationStatus
+): string {
+  switch (status) {
+    case 'admin-verified':
+    case 'verified':
+      return 'Reviewed and approved by an administrator.'
+
+    case 'community-reported':
+      return 'Submitted by the community — not yet admin-reviewed.'
+
+    case 'unverified':
+      return 'This information has not been verified.'
+
+    default:
+      return 'Verification status unavailable.'
+  }
+}

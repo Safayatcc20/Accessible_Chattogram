@@ -496,7 +496,7 @@ import {
   serverTimestamp,
   runTransaction,
 } from 'firebase/firestore'
-import { db } from '@/lib/firebase'
+import { db,auth } from '@/lib/firebase'
 // MOCK_STATS import removed in Phase 10 — stats now calculated from Firestore
 import type {
   Place,
@@ -535,6 +535,8 @@ interface FirestoreVerification {
   verificationCount: number
   communityReports:  number
   source:            string
+  verifiedAt?: unknown
+  verifiedBy?: string | null
 }
 
 interface FirestorePlace {
@@ -616,6 +618,13 @@ function fromFirestore(id: string, data: FirestorePlace): Place {
       verificationCount: data.verification.verificationCount,
       communityReports:  data.verification.communityReports,
       source:            data.verification.source,
+      // Phase 16.2 provenance fields — absent on legacy docs, undefined is fine
+      verifiedAt: timestampToDateString(
+        data.verification.verifiedAt instanceof Timestamp
+          ? data.verification.verifiedAt
+          : null
+      ),
+      verifiedBy: data.verification.verifiedBy ?? null,
     },
   }
 }
@@ -705,7 +714,7 @@ export async function fetchStats(): Promise<Stats> {
 
   for (const d of snap.docs) {
     const data = d.data() as FirestorePlace
-    if (data.verification.status === 'verified') verifiedPlaces++
+    if (data.verification.status === 'verified' || data.verification.status === 'admin-verified') verifiedPlaces++
     totalReports += data.verification.communityReports ?? 0
     if (data.area) areas.add(data.area)
   }
@@ -856,12 +865,15 @@ export async function approveContribution(
         parkingDistance:    null,
       },
 
-      verification: {
-        status:            'community-reported' as VerificationStatus,
+            verification: {
+        status:            'admin-verified' as VerificationStatus,
         lastVerified:      null,
         verificationCount: 0,
         communityReports:  1,
-        source:            'community',
+        source:            'community-contribution',
+        // Phase 16.2: record when and by whom this place was approved.
+        verifiedAt:        serverTimestamp(),
+        verifiedBy:        auth.currentUser?.uid ?? null,
       },
 
       createdAt:  serverTimestamp(),

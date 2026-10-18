@@ -11,7 +11,7 @@ import { Separator } from '@/components/ui/separator'
 import { AccessibilityStatus } from '@/components/accessibility/AccessibilityStatus'
 import { VerificationBadge } from '@/components/verification/VerificationBadge'
 import { usePlace } from '@/hooks/usePlaces'
-import { categoryLabel, formatDate, getRelativeDate } from '@/lib/utils'
+import { categoryLabel, formatDate, getRelativeDate, verificationDescription } from '@/lib/utils'
 
 export default function PlaceDetails() {
   const { id } = useParams<{ id: string }>()
@@ -172,7 +172,28 @@ export default function PlaceDetails() {
       {/* Verification info */}
       <section aria-labelledby="verification-heading" className="mb-8">
         <h2 id="verification-heading" className="text-lg font-semibold text-foreground mb-4">Verification Information</h2>
-        <div className="border border-border rounded-lg divide-y divide-border">
+                <div className="border border-border rounded-lg divide-y divide-border">
+          <InfoItem
+            label="Verification Status"
+            customValue={<VerificationBadge status={place.verification.status} showIcon />}
+          />
+          <InfoItem
+            label="Provenance"
+            value={verificationDescription(place.verification.status)}
+          />
+          {/* Admin-reviewed date — shown for admin-verified places (Phase 16.2) */}
+          {(place.verification.status === 'admin-verified' || place.verification.status === 'verified') && (
+            <InfoItem
+              label="Admin Reviewed"
+              value={
+                place.verification.verifiedAt
+                  ? `${formatDate(place.verification.verifiedAt ?? null)} (${getRelativeDate(place.verification.verifiedAt ?? null)})`
+                  : place.verification.lastVerified
+                  ? `${formatDate(place.verification.lastVerified)} (${getRelativeDate(place.verification.lastVerified)})`
+                  : 'Date unavailable'
+              }
+            />
+          )}
           <InfoItem
             label="Data Source"
             value={place.verification.source}
@@ -192,11 +213,12 @@ export default function PlaceDetails() {
             label="Community Reports"
             value={`${place.verification.communityReports} reports submitted`}
           />
-          <InfoItem
+        </div>
+          {/* <InfoItem
             label="Verification Status"
             customValue={<VerificationBadge status={place.verification.status} showIcon />}
           />
-        </div>
+        </div> */}
 
         <div className="mt-4 p-3 border border-amber-200 bg-amber-50 dark:border-amber-800 dark:bg-amber-950/30 rounded-lg flex items-start gap-2">
           <InfoIcon className="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" aria-hidden="true" />
