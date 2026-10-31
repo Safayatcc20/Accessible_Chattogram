@@ -10,6 +10,8 @@ import About from '@/pages/About'
 import NotFound from '@/pages/NotFound'
 import AdminLogin from '@/pages/AdminLogin'
 import AdminDashboard from '@/pages/AdminDashboard'
+import VerifyPlace from '@/pages/VerifyPlace'
+import ReportUpdate from '@/pages/ReportUpdate'
 
 export default function App() {
   return (
@@ -19,6 +21,8 @@ export default function App() {
         <Route path="/"           element={<Layout><Home /></Layout>} />
         <Route path="/explore"    element={<Layout fullHeight><Explore /></Layout>} />
         <Route path="/places/:id" element={<Layout><PlaceDetails /></Layout>} />
+        <Route path="/places/:id/verify" element={<Layout><VerifyPlace /></Layout>} />
+        <Route path="/places/:id/report" element={<Layout><ReportUpdate /></Layout>} />
         <Route path="/contribute" element={<Layout><Contribute /></Layout>} />
         <Route path="/guide"      element={<Layout><Guide /></Layout>} />
         <Route path="/about"      element={<Layout><About /></Layout>} />

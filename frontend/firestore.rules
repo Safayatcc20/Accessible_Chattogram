@@ -17,6 +17,190 @@ service cloud.firestore {
       allow write: if isAdmin();
     }
 
+    // Community verification requests are private to admins after submission.
+    match /verificationRequests/{requestId} {
+      allow read: if isAdmin();
+      allow create: if
+        request.resource.data.keys().hasOnly([
+          'placeId', 'placeName', 'accessibility', 'notes', 'submitterUid',
+          'status', 'createdAt', 'reviewedAt', 'reviewedBy'
+        ]) &&
+        request.resource.data.keys().hasAll([
+          'placeId', 'placeName', 'accessibility', 'notes', 'submitterUid',
+          'status', 'createdAt', 'reviewedAt', 'reviewedBy'
+        ]) &&
+        request.resource.data.placeId is string &&
+        request.resource.data.placeId.size() > 0 &&
+        exists(/databases/$(database)/documents/places/$(request.resource.data.placeId)) &&
+        request.resource.data.placeName is string &&
+        request.resource.data.placeName.size() >= 2 &&
+        request.resource.data.placeName.size() <= 150 &&
+        get(/databases/$(database)/documents/places/$(request.resource.data.placeId)).data.name == request.resource.data.placeName &&
+        request.resource.data.accessibility is map &&
+        request.resource.data.accessibility.keys().hasOnly([
+          'wheelchairEntrance', 'ramp', 'elevator', 'accessibleToilet',
+          'accessibleParking', 'tactilePaving', 'audioAssistance'
+        ]) &&
+        request.resource.data.accessibility.keys().hasAll([
+          'wheelchairEntrance', 'ramp', 'elevator', 'accessibleToilet',
+          'accessibleParking', 'tactilePaving', 'audioAssistance'
+        ]) &&
+        request.resource.data.accessibility.wheelchairEntrance is bool &&
+        request.resource.data.accessibility.ramp is bool &&
+        request.resource.data.accessibility.elevator is bool &&
+        request.resource.data.accessibility.accessibleToilet is bool &&
+        request.resource.data.accessibility.accessibleParking is bool &&
+        request.resource.data.accessibility.tactilePaving is bool &&
+        request.resource.data.accessibility.audioAssistance is bool &&
+        (request.resource.data.notes == null ||
+          (request.resource.data.notes is string && request.resource.data.notes.size() <= 2000)) &&
+        (request.resource.data.submitterUid == null ||
+          (request.auth != null && request.resource.data.submitterUid == request.auth.uid)) &&
+        request.resource.data.status == 'pending' &&
+        request.resource.data.createdAt == request.time &&
+        request.resource.data.reviewedAt == null &&
+        request.resource.data.reviewedBy == null;
+
+      allow update: if isAdmin() &&
+        resource.data.status == 'pending' &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'reviewedAt', 'reviewedBy']) &&
+        request.resource.data.status in ['approved', 'rejected'] &&
+        request.resource.data.reviewedAt == request.time &&
+        request.resource.data.reviewedBy == request.auth.uid;
+      allow delete: if false;
+    }
+
+    // Place update reports are private to admins. Public clients can submit a
+    // pending report; only admins can atomically review a pending report.
+    match /reports/{reportId} {
+      allow read: if isAdmin();
+
+      function placeDetailsMatchAfterReview(before, after) {
+        return after.diff(before).affectedKeys().hasOnly(resource.data.fields) &&
+          (!resource.data.fields.hasAny(['name']) || after.name == request.resource.data.appliedChanges.name) &&
+          (!resource.data.fields.hasAny(['address']) || after.address == request.resource.data.appliedChanges.address) &&
+          (!resource.data.fields.hasAny(['area']) || after.area == request.resource.data.appliedChanges.area) &&
+          (!resource.data.fields.hasAny(['phone']) || after.phone == request.resource.data.appliedChanges.phone) &&
+          (!resource.data.fields.hasAny(['website']) || after.website == request.resource.data.appliedChanges.website) &&
+          (!resource.data.fields.hasAny(['openingHours']) || after.openingHours == request.resource.data.appliedChanges.openingHours);
+      }
+
+      function accessibilityMatchesAfterReview(before, after) {
+        return after.diff(before).affectedKeys().hasOnly(['accessibility']) &&
+          after.accessibility.diff(before.accessibility).affectedKeys().hasOnly(resource.data.fields) &&
+          (!resource.data.fields.hasAny(['wheelchairEntrance']) || after.accessibility.wheelchairEntrance == request.resource.data.appliedChanges.wheelchairEntrance) &&
+          (!resource.data.fields.hasAny(['ramp']) || after.accessibility.ramp == request.resource.data.appliedChanges.ramp) &&
+          (!resource.data.fields.hasAny(['elevator']) || after.accessibility.elevator == request.resource.data.appliedChanges.elevator) &&
+          (!resource.data.fields.hasAny(['accessibleToilet']) || after.accessibility.accessibleToilet == request.resource.data.appliedChanges.accessibleToilet) &&
+          (!resource.data.fields.hasAny(['accessibleParking']) || after.accessibility.accessibleParking == request.resource.data.appliedChanges.accessibleParking) &&
+          (!resource.data.fields.hasAny(['tactilePaving']) || after.accessibility.tactilePaving == request.resource.data.appliedChanges.tactilePaving) &&
+          (!resource.data.fields.hasAny(['audioAssistance']) || after.accessibility.audioAssistance == request.resource.data.appliedChanges.audioAssistance);
+      }
+
+      function approvedPlaceMatchesTransaction() {
+        let placePath = /databases/$(database)/documents/places/$(resource.data.placeId);
+        let before = get(placePath).data;
+        let after = getAfter(placePath).data;
+        return existsAfter(placePath) &&
+          ((resource.data.category == 'place-details' && placeDetailsMatchAfterReview(before, after)) ||
+           (resource.data.category == 'accessibility' && accessibilityMatchesAfterReview(before, after)));
+      }
+
+      allow create: if
+        request.resource.data.keys().hasOnly([
+          'placeId', 'placeName', 'category', 'fields', 'description',
+          'reporterUid', 'status', 'createdAt', 'reviewedAt', 'reviewedBy',
+          'reviewDecision', 'rejectionReason', 'appliedChanges'
+        ]) &&
+        request.resource.data.keys().hasAll([
+          'placeId', 'placeName', 'category', 'fields', 'description',
+          'reporterUid', 'status', 'createdAt', 'reviewedAt', 'reviewedBy',
+          'reviewDecision', 'rejectionReason', 'appliedChanges'
+        ]) &&
+        request.resource.data.placeId is string &&
+        request.resource.data.placeId.size() > 0 &&
+        exists(/databases/$(database)/documents/places/$(request.resource.data.placeId)) &&
+        request.resource.data.placeName is string &&
+        request.resource.data.placeName.size() >= 2 &&
+        request.resource.data.placeName.size() <= 150 &&
+        get(/databases/$(database)/documents/places/$(request.resource.data.placeId)).data.name == request.resource.data.placeName &&
+        request.resource.data.category in ['place-details', 'accessibility'] &&
+        request.resource.data.fields is list &&
+        request.resource.data.fields.size() > 0 &&
+        request.resource.data.fields.size() <= 7 &&
+        request.resource.data.fields.toSet().size() == request.resource.data.fields.size() &&
+        (
+          (request.resource.data.category == 'place-details' &&
+            request.resource.data.fields.hasOnly(['name', 'address', 'area', 'phone', 'website', 'openingHours'])) ||
+          (request.resource.data.category == 'accessibility' &&
+            request.resource.data.fields.hasOnly([
+              'wheelchairEntrance', 'ramp', 'elevator', 'accessibleToilet',
+              'accessibleParking', 'tactilePaving', 'audioAssistance'
+            ]))
+        ) &&
+        request.resource.data.description is string &&
+        request.resource.data.description.size() > 0 &&
+        request.resource.data.description.size() <= 2000 &&
+        (request.resource.data.reporterUid == null ||
+          (request.auth != null && request.resource.data.reporterUid == request.auth.uid)) &&
+        request.resource.data.status == 'pending' &&
+        request.resource.data.createdAt == request.time &&
+        request.resource.data.reviewedAt == null &&
+        request.resource.data.reviewedBy == null &&
+        request.resource.data.reviewDecision == null &&
+        request.resource.data.rejectionReason == null &&
+        request.resource.data.appliedChanges == null;
+
+      allow update: if isAdmin() &&
+        resource.data.status == 'pending' &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'status', 'reviewedAt', 'reviewedBy', 'reviewDecision',
+          'rejectionReason', 'appliedChanges'
+        ]) &&
+        request.resource.data.keys().hasAll([
+          'status', 'reviewedAt', 'reviewedBy', 'reviewDecision',
+          'rejectionReason', 'appliedChanges'
+        ]) &&
+        request.resource.data.status in ['approved', 'rejected'] &&
+        request.resource.data.reviewDecision == request.resource.data.status &&
+        request.resource.data.reviewedAt == request.time &&
+        request.resource.data.reviewedBy == request.auth.uid &&
+        (
+          (request.resource.data.status == 'rejected' &&
+            request.resource.data.rejectionReason is string &&
+            request.resource.data.rejectionReason.size() > 0 &&
+            request.resource.data.rejectionReason.size() <= 1000 &&
+            request.resource.data.rejectionReason.matches('.*\\S.*') &&
+            request.resource.data.appliedChanges == null) ||
+          (request.resource.data.status == 'approved' &&
+            request.resource.data.rejectionReason == null &&
+            request.resource.data.appliedChanges is map &&
+            request.resource.data.appliedChanges.keys().hasOnly(resource.data.fields) &&
+            request.resource.data.appliedChanges.keys().hasAll(resource.data.fields) &&
+            (
+              (resource.data.category == 'place-details' &&
+                resource.data.fields.hasOnly(['name', 'address', 'area', 'phone', 'website', 'openingHours']) &&
+                (!resource.data.fields.hasAny(['name']) || (request.resource.data.appliedChanges.name is string && request.resource.data.appliedChanges.name.size() >= 2 && request.resource.data.appliedChanges.name.size() <= 150)) &&
+                (!resource.data.fields.hasAny(['address']) || (request.resource.data.appliedChanges.address is string && request.resource.data.appliedChanges.address.size() >= 5 && request.resource.data.appliedChanges.address.size() <= 300)) &&
+                (!resource.data.fields.hasAny(['area']) || (request.resource.data.appliedChanges.area is string && request.resource.data.appliedChanges.area.size() >= 2 && request.resource.data.appliedChanges.area.size() <= 100)) &&
+                (!resource.data.fields.hasAny(['phone']) || request.resource.data.appliedChanges.phone == null || (request.resource.data.appliedChanges.phone is string && request.resource.data.appliedChanges.phone.size() <= 30)) &&
+                (!resource.data.fields.hasAny(['website']) || request.resource.data.appliedChanges.website == null || (request.resource.data.appliedChanges.website is string && request.resource.data.appliedChanges.website.size() <= 2048)) &&
+                (!resource.data.fields.hasAny(['openingHours']) || request.resource.data.appliedChanges.openingHours == null || (request.resource.data.appliedChanges.openingHours is string && request.resource.data.appliedChanges.openingHours.size() <= 500))) ||
+              (resource.data.category == 'accessibility' &&
+                resource.data.fields.hasOnly(['wheelchairEntrance', 'ramp', 'elevator', 'accessibleToilet', 'accessibleParking', 'tactilePaving', 'audioAssistance']) &&
+                (!resource.data.fields.hasAny(['wheelchairEntrance']) || request.resource.data.appliedChanges.wheelchairEntrance == null || request.resource.data.appliedChanges.wheelchairEntrance is bool) &&
+                (!resource.data.fields.hasAny(['ramp']) || request.resource.data.appliedChanges.ramp == null || request.resource.data.appliedChanges.ramp is bool) &&
+                (!resource.data.fields.hasAny(['elevator']) || request.resource.data.appliedChanges.elevator == null || request.resource.data.appliedChanges.elevator is bool) &&
+                (!resource.data.fields.hasAny(['accessibleToilet']) || request.resource.data.appliedChanges.accessibleToilet == null || request.resource.data.appliedChanges.accessibleToilet is bool) &&
+                (!resource.data.fields.hasAny(['accessibleParking']) || request.resource.data.appliedChanges.accessibleParking == null || request.resource.data.appliedChanges.accessibleParking is bool) &&
+                (!resource.data.fields.hasAny(['tactilePaving']) || request.resource.data.appliedChanges.tactilePaving == null || request.resource.data.appliedChanges.tactilePaving is bool) &&
+                (!resource.data.fields.hasAny(['audioAssistance']) || request.resource.data.appliedChanges.audioAssistance == null || request.resource.data.appliedChanges.audioAssistance is bool))
+            )
+        )) &&
+        (request.resource.data.status != 'approved' || approvedPlaceMatchesTransaction());
+      allow delete: if false;
+    }
+
     // New place submissions: create-only for public (with strict validation),
     // read and update for admins only, delete by nobody.
     match /contributions/{contributionId} {

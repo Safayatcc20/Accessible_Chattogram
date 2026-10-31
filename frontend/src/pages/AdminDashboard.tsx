@@ -9,7 +9,7 @@
  * Reject: shows a confirmation dialog, then marks the contribution as rejected.
  */
 
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { signOut } from 'firebase/auth'
 import { useNavigate } from 'react-router-dom'
 import {
@@ -25,6 +25,7 @@ import { Skeleton }  from '@/components/ui/skeleton'
 import { Separator } from '@/components/ui/separator'
 import { Input }     from '@/components/ui/input'
 import { Label }     from '@/components/ui/label'
+import { Textarea } from '@/components/ui/textarea'
 import {
   Dialog,
   DialogContent,
@@ -34,7 +35,10 @@ import {
   DialogFooter,
 } from '@/components/ui/dialog'
 import { useToast }  from '@/hooks/use-toast'
+import { toast } from '@/hooks/use-toast'
 import { useAdminAuth }            from '@/hooks/useAdminAuth'
+import { usePlace } from '@/hooks/usePlaces'
+import { usePendingPlaceReports, useReviewedPlaceReports, useReviewPlaceReport } from '@/hooks/usePlaceReports'
 import {
   usePendingContributions,
   useApproveContribution,
@@ -46,7 +50,10 @@ import {
   findDuplicateCandidates,
   type DuplicateCandidate,
 } from '@/lib/duplicateDetection'
-import type { Contribution } from '@/types'
+import type { Contribution, Place } from '@/types'
+import type { VerificationRequest } from '@/types'
+import type { PlaceReport, PlaceReportChanges, PlaceReportField, PlaceReportValue } from '@/types'
+import { usePendingVerificationRequests, useReviewedVerificationRequests, useReviewVerificationRequest } from '@/hooks/useContributions'
 
 // ─── helpers ────────────────────────────────────────────────────────────────
 
@@ -68,6 +75,11 @@ function describeError(error: unknown): string {
   const msg  = (error as Error)?.message ?? ''
   const code = (error as { code?: string })?.code ?? ''
 
+  if (msg === 'report-not-found') return 'This report no longer exists.'
+  if (msg === 'report-already-reviewed') return 'This report has already been reviewed.'
+  if (msg === 'report-place-not-found') return 'The associated place no longer exists.'
+  if (msg === 'report-place-changed') return 'The place changed while you were reviewing this report. Reload the dashboard and review the current values.'
+  if (msg.startsWith('report-')) return 'The report changes or rejection reason are invalid. Review the entered values and try again.'
   if (msg === 'contribution-not-found')        return 'This contribution no longer exists.'
   if (msg === 'contribution-already-reviewed') return 'This contribution was already approved or rejected.'
   if (msg.startsWith('invalid-coordinates'))   return msg.replace('invalid-coordinates: ', '')
@@ -608,10 +620,72 @@ export default function AdminDashboard() {
   const authState = useAdminAuth()
   const navigate  = useNavigate()
   const { data: contributions, isLoading, isError, error } = usePendingContributions()
+  const verificationQuery = usePendingVerificationRequests()
+  const verificationHistoryQuery = useReviewedVerificationRequests()
+  const verificationReview = useReviewVerificationRequest()
+  const placeReportsQuery = usePendingPlaceReports()
+  const placeReportsHistoryQuery = useReviewedPlaceReports()
+  const placeReportReview = useReviewPlaceReport()
 
   // Which contribution is currently being acted on
   const [approveTarget, setApproveTarget] = useState<Contribution | null>(null)
   const [rejectTarget,  setRejectTarget]  = useState<Contribution | null>(null)
+  const [verificationBusyId, setVerificationBusyId] = useState<string | null>(null)
+  const [placeReportBusyId, setPlaceReportBusyId] = useState<string | null>(null)
+
+  const handlePlaceReportReview = async (input: {
+    report: PlaceReport
+    decision: 'approved' | 'rejected'
+    reason?: string
+    expectedCurrentValues?: PlaceReportChanges
+    approvedChanges?: PlaceReportChanges
+  }) => {
+    setPlaceReportBusyId(input.report.id)
+    try {
+      await placeReportReview.mutateAsync({
+        reportId: input.report.id,
+        placeId: input.report.placeId,
+        decision: input.decision,
+        reason: input.reason,
+        expectedCurrentValues: input.expectedCurrentValues,
+        approvedChanges: input.approvedChanges,
+      })
+      toast({
+        title: input.decision === 'approved' ? 'Report approved' : 'Report rejected',
+        description: input.decision === 'approved'
+          ? `Selected updates for "${input.report.placeName}" were applied.`
+          : `The report for "${input.report.placeName}" was rejected and the reason was recorded.`,
+      })
+    } catch (reviewError) {
+      toast({ title: 'Report review failed', description: describeError(reviewError), variant: 'destructive' })
+      throw reviewError
+    } finally {
+      setPlaceReportBusyId(null)
+    }
+  }
+
+  const handleVerificationReview = async (request: VerificationRequest, decision: 'approved' | 'rejected') => {
+    setVerificationBusyId(request.id)
+    try {
+      await verificationReview.mutateAsync({ request, decision })
+      toast({
+        title: decision === 'approved' ? 'Verification approved' : 'Verification rejected',
+        description: decision === 'approved'
+          ? `Community confirmation for "${request.placeName}" is now recorded.`
+          : `The verification request for "${request.placeName}" was marked as rejected.`,
+      })
+    } catch (reviewError) {
+      const message = (reviewError as Error)?.message ?? ''
+      const description = message.includes('already-reviewed')
+        ? 'This request has already been reviewed.'
+        : message.includes('place-not-found')
+          ? 'The associated place no longer exists, so this request could not be reviewed.'
+          : 'Review failed. Check your connection and try again.'
+      toast({ title: 'Verification review failed', description, variant: 'destructive' })
+    } finally {
+      setVerificationBusyId(null)
+    }
+  }
 
   const handleSignOut = async () => {
     await signOut(auth)
@@ -651,6 +725,88 @@ export default function AdminDashboard() {
           Sign out
         </Button>
       </div>
+
+      <section aria-labelledby="place-update-reports-heading" className="mb-10">
+        <div className="mb-4 flex items-center justify-between">
+          <h2 id="place-update-reports-heading" className="text-sm font-semibold text-foreground">Place Update Reports</h2>
+          {!placeReportsQuery.isLoading && !placeReportsQuery.isError && <span className="text-xs text-muted-foreground">{placeReportsQuery.data?.length ?? 0} awaiting review</span>}
+        </div>
+        {placeReportsQuery.isLoading && <div className="space-y-3"><Skeleton className="h-40 w-full" /><Skeleton className="h-40 w-full" /></div>}
+        {placeReportsQuery.isError && <p role="alert" className="rounded-lg border border-destructive/30 p-4 text-sm text-destructive">Could not load place update reports. Confirm admin access and the reports Firestore index.</p>}
+        {!placeReportsQuery.isLoading && !placeReportsQuery.isError && placeReportsQuery.data?.length === 0 && <p className="rounded-lg border border-border p-5 text-sm text-muted-foreground">No pending place update reports.</p>}
+        <div className="space-y-3">
+          {placeReportsQuery.data?.map(report => (
+            <PlaceReportCard
+              key={report.id}
+              report={report}
+              busy={placeReportBusyId === report.id}
+              onReview={input => handlePlaceReportReview({ report, ...input })}
+            />
+          ))}
+        </div>
+      </section>
+
+      <section aria-labelledby="place-update-reports-history-heading" className="mb-10">
+        <div className="mb-4 flex items-center justify-between">
+          <h2 id="place-update-reports-history-heading" className="text-sm font-semibold text-foreground">Recent Place Update Report History</h2>
+          {!placeReportsHistoryQuery.isLoading && !placeReportsHistoryQuery.isError && <span className="text-xs text-muted-foreground">Latest {placeReportsHistoryQuery.data?.length ?? 0}</span>}
+        </div>
+        {placeReportsHistoryQuery.isLoading && <Skeleton className="h-20 w-full" />}
+        {placeReportsHistoryQuery.isError && <p role="alert" className="rounded-lg border border-destructive/30 p-4 text-sm text-destructive">Could not load reviewed report history. Check the reports index and admin permissions.</p>}
+        {!placeReportsHistoryQuery.isLoading && !placeReportsHistoryQuery.isError && placeReportsHistoryQuery.data?.length === 0 && <p className="rounded-lg border border-border p-5 text-sm text-muted-foreground">No reviewed place update reports yet.</p>}
+        <div className="space-y-2">
+          {placeReportsHistoryQuery.data?.map(report => (
+            <article key={report.id} className="rounded-lg border border-border bg-card px-4 py-3">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div><h3 className="text-sm font-medium text-foreground">{report.placeName}</h3><p className="text-xs text-muted-foreground">{report.category === 'accessibility' ? 'Accessibility' : 'Place details'} · {report.fields.join(', ')}</p></div>
+                <div className="flex flex-wrap items-center gap-2"><Badge variant={report.status === 'approved' ? 'verified' : 'destructive'}>{report.status}</Badge><span className="text-xs text-muted-foreground">{report.reviewedAt ? `Reviewed ${getRelativeDate(report.reviewedAt.slice(0, 10))}` : 'Review date unavailable'} by {report.reviewedBy ?? 'unknown admin'}</span></div>
+              </div>
+              {report.rejectionReason && <p className="mt-2 text-xs text-muted-foreground"><span className="font-medium">Rejection reason: </span>{report.rejectionReason}</p>}
+              {report.appliedChanges && <p className="mt-2 break-words text-xs text-muted-foreground"><span className="font-medium">Applied changes: </span>{Object.entries(report.appliedChanges).map(([field, value]) => `${field}: ${value ?? 'Not recorded'}`).join(' · ')}</p>}
+            </article>
+          ))}
+        </div>
+      </section>
+
+      <section aria-labelledby="verification-requests-heading" className="mb-10">
+        <div className="mb-4 flex items-center justify-between">
+          <h2 id="verification-requests-heading" className="text-sm font-semibold text-foreground">Community Verification Requests</h2>
+          {!verificationQuery.isLoading && !verificationQuery.isError && <span className="text-xs text-muted-foreground">{verificationQuery.data?.length ?? 0} awaiting review</span>}
+        </div>
+        {verificationQuery.isLoading && <div className="space-y-3"><Skeleton className="h-28 w-full" /><Skeleton className="h-28 w-full" /></div>}
+        {verificationQuery.isError && <p role="alert" className="rounded-lg border border-destructive/30 p-4 text-sm text-destructive">Could not load verification requests. Confirm the verificationRequests rules are deployed and any required Firestore index is available.</p>}
+        {!verificationQuery.isLoading && !verificationQuery.isError && verificationQuery.data?.length === 0 && <p className="rounded-lg border border-border p-5 text-sm text-muted-foreground">No pending verification requests.</p>}
+        <div className="space-y-3">
+          {verificationQuery.data?.map(request => (
+            <VerificationRequestCard key={request.id} request={request} busy={verificationBusyId === request.id} onReview={decision => void handleVerificationReview(request, decision)} />
+          ))}
+        </div>
+      </section>
+
+      <section aria-labelledby="verification-history-heading" className="mb-10">
+        <div className="mb-4 flex items-center justify-between">
+          <h2 id="verification-history-heading" className="text-sm font-semibold text-foreground">Recent Verification History</h2>
+          {!verificationHistoryQuery.isLoading && !verificationHistoryQuery.isError && <span className="text-xs text-muted-foreground">Latest {verificationHistoryQuery.data?.length ?? 0}</span>}
+        </div>
+        {verificationHistoryQuery.isLoading && <Skeleton className="h-20 w-full" />}
+        {verificationHistoryQuery.isError && <p role="alert" className="rounded-lg border border-destructive/30 p-4 text-sm text-destructive">Could not load reviewed verification history. Check the Firestore index and admin permissions.</p>}
+        {!verificationHistoryQuery.isLoading && !verificationHistoryQuery.isError && verificationHistoryQuery.data?.length === 0 && <p className="rounded-lg border border-border p-5 text-sm text-muted-foreground">No reviewed verification requests yet.</p>}
+        <div className="space-y-2">
+          {verificationHistoryQuery.data?.map(request => (
+            <article key={request.id} className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border bg-card px-4 py-3">
+              <div>
+                <h3 className="text-sm font-medium text-foreground">{request.placeName}</h3>
+                <p className="text-xs text-muted-foreground">Place ID: {request.placeId}</p>
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                <Badge variant={request.status === 'approved' ? 'verified' : 'destructive'}>{request.status === 'approved' ? 'Approved' : 'Rejected'}</Badge>
+                <span className="text-xs text-muted-foreground">{request.reviewedAt ? `Reviewed ${getRelativeDate(request.reviewedAt)}` : 'Review date unavailable'}</span>
+                <span className="text-xs text-muted-foreground">by {request.reviewedBy ?? 'unknown admin'}</span>
+              </div>
+            </article>
+          ))}
+        </div>
+      </section>
 
       {/* Section heading */}
       <div className="flex items-center justify-between mb-4">
@@ -761,6 +917,228 @@ export default function AdminDashboard() {
         onClose={() => setRejectTarget(null)}
       />
     </main>
+  )
+}
+
+const PLACE_REPORT_FIELD_LABELS: Record<PlaceReportField, string> = {
+  name: 'Place name',
+  address: 'Address',
+  area: 'Area',
+  phone: 'Phone',
+  website: 'Website',
+  openingHours: 'Opening hours',
+  wheelchairEntrance: 'Wheelchair accessible entrance',
+  ramp: 'Ramp',
+  elevator: 'Elevator',
+  accessibleToilet: 'Accessible toilet',
+  accessibleParking: 'Accessible parking',
+  tactilePaving: 'Tactile paving',
+  audioAssistance: 'Audio assistance',
+}
+
+function currentPlaceReportValue(place: Place, field: PlaceReportField): PlaceReportValue {
+  if (field in place.accessibility) return place.accessibility[field as keyof Place['accessibility']] ?? null
+  return (place[field as 'name' | 'address' | 'area' | 'phone' | 'website' | 'openingHours'] ?? null) as string | null
+}
+
+function displayPlaceReportValue(value: PlaceReportValue): string {
+  if (value === true) return 'Yes'
+  if (value === false) return 'No'
+  if (value === null || value === '') return 'Not recorded'
+  return String(value)
+}
+
+function PlaceReportCard({ report, busy, onReview }: {
+  report: PlaceReport
+  busy: boolean
+  onReview: (input: {
+    decision: 'approved' | 'rejected'
+    reason?: string
+    expectedCurrentValues?: PlaceReportChanges
+    approvedChanges?: PlaceReportChanges
+  }) => Promise<void>
+}) {
+  const placeQuery = usePlace(report.placeId)
+  const [approvedChanges, setApprovedChanges] = useState<PlaceReportChanges>({})
+  const [rejectionReason, setRejectionReason] = useState('')
+  const [dialogDecision, setDialogDecision] = useState<'approved' | 'rejected' | null>(null)
+  const [validationError, setValidationError] = useState('')
+
+  useEffect(() => {
+    setApprovedChanges({})
+    setValidationError('')
+  }, [report.id, placeQuery.data?.id])
+
+  const place = placeQuery.data
+  const expectedCurrentValues: PlaceReportChanges | undefined = place
+    ? Object.fromEntries(report.fields.map(field => [field, currentPlaceReportValue(place, field)])) as PlaceReportChanges
+    : undefined
+
+  const getValidatedChanges = (): PlaceReportChanges | null => {
+    if (!place) return null
+    const changes: PlaceReportChanges = {}
+    for (const field of report.fields) {
+      const value = approvedChanges[field]
+      const isAccessibility = field in place.accessibility
+      if (isAccessibility) {
+        if (typeof value !== 'boolean' && value !== null) return null
+        changes[field] = value
+      } else {
+        if (typeof value !== 'string' && value !== null) return null
+        const trimmed = typeof value === 'string' ? value.trim() : ''
+        const nullable = field === 'phone' || field === 'website' || field === 'openingHours'
+        if (!trimmed && !nullable) return null
+        changes[field] = trimmed || (nullable ? null : trimmed)
+      }
+    }
+    return changes
+  }
+
+  const openApproval = () => {
+    const changes = getValidatedChanges()
+    if (!changes) {
+      setValidationError('Enter a replacement value or explicitly choose a value for every reported field before approving.')
+      return
+    }
+    setValidationError('')
+    setDialogDecision('approved')
+  }
+
+  const confirmReview = async () => {
+    try {
+      if (dialogDecision === 'rejected') {
+        const reason = rejectionReason.trim()
+        if (!reason) {
+          setValidationError('A rejection reason is required.')
+          return
+        }
+        await onReview({ decision: 'rejected', reason })
+      } else if (dialogDecision === 'approved') {
+        const changes = getValidatedChanges()
+        if (!changes || !expectedCurrentValues) return
+        await onReview({ decision: 'approved', expectedCurrentValues, approvedChanges: changes })
+      }
+      setDialogDecision(null)
+      setRejectionReason('')
+      setValidationError('')
+    } catch {
+      // The dashboard handler already shows the Firebase or transaction error.
+      // Keep the confirmation open so the admin can retry after correcting it.
+    }
+  }
+
+  return (
+    <article className="rounded-lg border border-border bg-card p-4">
+      <div className="mb-3 flex flex-wrap items-start justify-between gap-2">
+        <div>
+          <h3 className="font-semibold">{report.placeName}</h3>
+          <p className="text-xs text-muted-foreground">Place ID: {report.placeId} · {report.category === 'accessibility' ? 'Accessibility' : 'Place details'} · Submitted {getRelativeDate(report.createdAt.slice(0, 10))}</p>
+        </div>
+        <Badge variant="warning">{report.status}</Badge>
+      </div>
+      <p className="mb-2 text-xs text-muted-foreground">Reported fields: {report.fields.map(field => PLACE_REPORT_FIELD_LABELS[field]).join(', ')}</p>
+      <p className="mb-3 whitespace-pre-wrap text-sm">{report.description}</p>
+      <p className="mb-3 text-xs text-muted-foreground">{report.reporterUid ? `Reporter UID: ${report.reporterUid}` : 'Submitted without a signed-in UID'}</p>
+
+      {placeQuery.isLoading && <Skeleton className="mb-3 h-20 w-full" />}
+      {placeQuery.isError && <p role="alert" className="mb-3 text-sm text-destructive">Could not load current place values for this report.</p>}
+      {!placeQuery.isLoading && !placeQuery.isError && !place && <p role="alert" className="mb-3 text-sm text-destructive">The associated place no longer exists. This report can be rejected with a reason.</p>}
+      {place && (
+        <div className="mb-4 space-y-3 rounded-md border border-border p-3">
+          <p className="text-xs font-semibold">Current values and admin-approved replacements</p>
+          {report.fields.map(field => {
+            const currentValue = currentPlaceReportValue(place, field)
+            const value = approvedChanges[field]
+            const isAccessibility = field in place.accessibility
+            const nullableText = field === 'phone' || field === 'website' || field === 'openingHours'
+            return (
+              <div key={field} className="grid gap-2 border-t border-border pt-3 sm:grid-cols-2">
+                <p className="text-sm"><span className="font-medium">{PLACE_REPORT_FIELD_LABELS[field]} now: </span>{displayPlaceReportValue(currentValue)}</p>
+                <div>
+                  <Label htmlFor={`report-change-${report.id}-${field}`} className="text-xs">Replacement value</Label>
+                  {isAccessibility ? (
+                    <select
+                      id={`report-change-${report.id}-${field}`}
+                      value={value === undefined ? '' : value === null ? 'unknown' : String(value)}
+                      onChange={event => setApprovedChanges(current => ({
+                        ...current,
+                        [field]: event.target.value === '' ? undefined : event.target.value === 'unknown' ? null : event.target.value === 'true',
+                      }))}
+                      disabled={busy || !place}
+                      className="mt-1 flex h-9 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+                    >
+                      <option value="">Choose a replacement</option>
+                      <option value="true">Yes</option>
+                      <option value="false">No</option>
+                      <option value="unknown">Not known / clear value</option>
+                    </select>
+                  ) : (
+                    <>
+                      <Input
+                        id={`report-change-${report.id}-${field}`}
+                        value={typeof value === 'string' ? value : ''}
+                        onChange={event => setApprovedChanges(current => ({ ...current, [field]: event.target.value }))}
+                        disabled={busy}
+                        className="mt-1"
+                        placeholder={nullableText ? 'Enter a value or choose Clear' : 'Enter the corrected value'}
+                      />
+                      {nullableText && <Button type="button" size="sm" variant="ghost" className="mt-1 h-7 px-2 text-xs" disabled={busy} onClick={() => setApprovedChanges(current => ({ ...current, [field]: null }))}>Clear this field</Button>}
+                    </>
+                  )}
+                </div>
+              </div>
+            )
+          })}
+        </div>
+      )}
+
+      {validationError && <p role="alert" className="mb-3 text-sm text-destructive">{validationError}</p>}
+      <div className="flex flex-wrap gap-2">
+        <Button size="sm" disabled={busy || !place || placeQuery.isLoading || placeQuery.isError} onClick={openApproval}>{busy ? 'Saving…' : 'Approve and apply changes'}</Button>
+        <Button size="sm" variant="outline" disabled={busy} className="text-destructive" onClick={() => { setValidationError(''); setDialogDecision('rejected') }}>Reject</Button>
+      </div>
+
+      <Dialog open={dialogDecision !== null} onOpenChange={open => { if (!open && !busy) setDialogDecision(null) }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>{dialogDecision === 'approved' ? 'Apply approved report changes?' : 'Reject this report?'}</DialogTitle>
+            <DialogDescription>
+              {dialogDecision === 'approved'
+                ? `This updates only the fields selected in the report for ${report.placeName}. The report and place update are committed together.`
+                : `The report for ${report.placeName} will remain in admin history. Provide a reason for the rejection.`}
+            </DialogDescription>
+          </DialogHeader>
+          {dialogDecision === 'approved' && <ul className="space-y-1 text-sm">{report.fields.map(field => <li key={field}><span className="font-medium">{PLACE_REPORT_FIELD_LABELS[field]}: </span>{displayPlaceReportValue(getValidatedChanges()?.[field] ?? null)}</li>)}</ul>}
+          {dialogDecision === 'rejected' && <div><Label htmlFor={`report-rejection-reason-${report.id}`}>Rejection reason</Label><Textarea id={`report-rejection-reason-${report.id}`} value={rejectionReason} onChange={event => setRejectionReason(event.target.value)} maxLength={1000} className="mt-2" placeholder="Explain why the report is being rejected." /><p className="mt-1 text-right text-xs text-muted-foreground">{rejectionReason.length}/1000</p></div>}
+          {validationError && <p role="alert" className="text-sm text-destructive">{validationError}</p>}
+          <DialogFooter>
+            <Button type="button" variant="outline" disabled={busy} onClick={() => setDialogDecision(null)}>Cancel</Button>
+            <Button type="button" variant={dialogDecision === 'rejected' ? 'destructive' : 'default'} disabled={busy || (dialogDecision === 'rejected' && !rejectionReason.trim())} onClick={() => void confirmReview()}>{busy ? 'Saving…' : dialogDecision === 'approved' ? 'Confirm and apply' : 'Confirm rejection'}</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </article>
+  )
+}
+
+function VerificationRequestCard({ request, busy, onReview }: { request: VerificationRequest; busy: boolean; onReview: (decision: 'approved' | 'rejected') => void }) {
+  const entries = Object.entries(request.accessibility) as [keyof VerificationRequest['accessibility'], boolean][]
+  return (
+    <article className="rounded-lg border border-border bg-card p-4">
+      <div className="mb-3 flex flex-wrap items-start justify-between gap-2">
+        <div><h3 className="font-semibold">{request.placeName}</h3><p className="text-xs text-muted-foreground">Place ID: {request.placeId} · Submitted {getRelativeDate(request.createdAt.slice(0, 10))}</p></div>
+        <Badge variant="warning">Pending review</Badge>
+      </div>
+      <div className="mb-3 grid grid-cols-1 gap-1 sm:grid-cols-2">
+        {entries.map(([key, value]) => <p key={key} className="text-sm text-muted-foreground">{ACCESSIBILITY_LABELS[key]}: <span className="font-medium text-foreground">{value ? 'Confirmed available' : 'Not confirmed'}</span></p>)}
+      </div>
+      {request.notes && <p className="mb-3 whitespace-pre-wrap text-sm"><span className="font-medium">Notes: </span>{request.notes}</p>}
+      <p className="mb-3 text-xs text-muted-foreground">{request.submitterUid ? `Submitted by signed-in user ${request.submitterUid}` : 'Submitted anonymously'}</p>
+      <div className="flex gap-2">
+        <Button size="sm" disabled={busy} onClick={() => onReview('approved')}>{busy ? 'Saving…' : 'Approve verification'}</Button>
+        <Button size="sm" variant="outline" disabled={busy} className="text-destructive" onClick={() => onReview('rejected')}>Reject</Button>
+      </div>
+    </article>
   )
 }
 

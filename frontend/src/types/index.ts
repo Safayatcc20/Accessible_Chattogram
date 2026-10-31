@@ -118,6 +118,9 @@ export interface Place {
     source: string
     verifiedAt?: string | null
     verifiedBy?: string | null
+    communityVerifiedAt?: string | null
+    communityVerifiedBy?: string | null
+    communityVerificationCount?: number
   }
 
   isOpenNow?: boolean
@@ -203,4 +206,68 @@ export interface Contribution {
   status:     ContributionStatus
   createdAt:  string        // ISO string converted from Firestore Timestamp
   reviewedAt: string | null
+}
+
+
+export type VerificationRequestStatus = 'pending' | 'approved' | 'rejected'
+
+export interface VerificationRequest {
+  id: string
+  placeId: string
+  placeName: string
+  accessibility: {
+    wheelchairEntrance: boolean
+    ramp: boolean
+    elevator: boolean
+    accessibleToilet: boolean
+    accessibleParking: boolean
+    tactilePaving: boolean
+    audioAssistance: boolean
+  }
+  notes: string | null
+  submitterUid: string | null
+  status: VerificationRequestStatus
+  createdAt: string
+  reviewedAt: string | null
+  reviewedBy: string | null
+}
+
+export type PlaceReportCategory = 'place-details' | 'accessibility'
+export type PlaceReportStatus = 'pending' | 'approved' | 'rejected'
+export type PlaceReportField =
+  | 'name'
+  | 'address'
+  | 'area'
+  | 'phone'
+  | 'website'
+  | 'openingHours'
+  | 'wheelchairEntrance'
+  | 'ramp'
+  | 'elevator'
+  | 'accessibleToilet'
+  | 'accessibleParking'
+  | 'tactilePaving'
+  | 'audioAssistance'
+
+export interface PlaceReportInput {
+  placeId: string
+  category: PlaceReportCategory
+  fields: PlaceReportField[]
+  description: string
+}
+
+export type PlaceReportValue = string | boolean | null
+export type PlaceReportChanges = Partial<Record<PlaceReportField, PlaceReportValue>>
+
+export interface PlaceReport extends PlaceReportInput {
+  id: string
+  placeName: string
+  reporterUid: string | null
+  status: PlaceReportStatus
+  createdAt: string
+  reviewedAt: string | null
+  reviewedBy: string | null
+  reviewDecision: 'approved' | 'rejected' | null
+  rejectionReason: string | null
+  appliedChanges: PlaceReportChanges | null
 }

@@ -5,6 +5,12 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "dev:emulator": "vite --mode emulator",
+    "emulator:start": "npx --yes firebase-tools emulators:start --only auth,firestore --project accessible-chattogram",
+    "seed:report-emulator": "node scripts/seed-report-emulator.mjs",
+    "test:firestore-rules": "node scripts/firestore-rules.test.mjs",
+    "test:report-emulator": "npx --yes firebase-tools emulators:exec --project accessible-chattogram --only firestore \"node scripts/report-emulator.integration.test.mjs\"",
+    "test:report-review-emulator": "node scripts/report-review-emulator.integration.test.mjs",
     "build": "tsc && vite build",
     "lint": "eslint . --ext ts,tsx --report-unused-disable-directives --max-warnings 0",
     "preview": "vite preview"

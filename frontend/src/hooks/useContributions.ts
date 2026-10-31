@@ -121,8 +121,12 @@ import {
   fetchPendingContributions,
   fetchPlaces,
   rejectContribution,
+  fetchPendingVerificationRequests,
+  fetchReviewedVerificationRequests,
+  reviewVerificationRequest,
 } from '@/services/api'
 import { toast } from '@/hooks/use-toast'
+import type { VerificationRequest } from '@/types'
 
 // ─── Query keys ──────────────────────────────────────────────────────────────
 
@@ -131,6 +135,47 @@ const PENDING_QUERY_KEY = ['contributions', 'pending'] as const
 // Separate key so the admin duplicate-check load doesn't pollute the public
 // explore-page places cache (different staleTime requirements).
 const ADMIN_PLACES_KEY = ['admin', 'places'] as const
+const VERIFICATION_QUERY_KEY = ['verificationRequests', 'pending'] as const
+const REVIEWED_VERIFICATION_QUERY_KEY = ['verificationRequests', 'reviewed'] as const
+
+export function usePendingVerificationRequests() {
+  return useQuery({
+    queryKey: VERIFICATION_QUERY_KEY,
+    queryFn: fetchPendingVerificationRequests,
+    retry: (failureCount, error: unknown) => {
+      const code = (error as { code?: string }).code
+      if (code === 'permission-denied' || code === 'failed-precondition') return false
+      return failureCount < 2
+    },
+  })
+}
+
+export function useReviewedVerificationRequests() {
+  return useQuery({
+    queryKey: REVIEWED_VERIFICATION_QUERY_KEY,
+    queryFn: fetchReviewedVerificationRequests,
+    retry: (failureCount, error: unknown) => {
+      const code = (error as { code?: string }).code
+      if (code === 'permission-denied' || code === 'failed-precondition') return false
+      return failureCount < 2
+    },
+  })
+}
+
+export function useReviewVerificationRequest() {
+  const client = useQueryClient()
+  return useMutation({
+    mutationFn: ({ request, decision }: { request: VerificationRequest; decision: 'approved' | 'rejected' }) =>
+      reviewVerificationRequest(request.id, decision),
+    onSuccess: (_result, { request }) => {
+      void client.invalidateQueries({ queryKey: VERIFICATION_QUERY_KEY })
+      void client.invalidateQueries({ queryKey: REVIEWED_VERIFICATION_QUERY_KEY })
+      void client.invalidateQueries({ queryKey: ['place', request.placeId] })
+      void client.invalidateQueries({ queryKey: ['places'] })
+      void client.invalidateQueries({ queryKey: ['stats'] })
+    },
+  })
+}
 
 // ─── Places loader for duplicate detection ────────────────────────────────────
 

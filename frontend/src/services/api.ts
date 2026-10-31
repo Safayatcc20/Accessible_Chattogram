@@ -416,7 +416,7 @@
  *   fetchStats()   — calculated from places collection (totalPlaces, verifiedPlaces, areasCount, totalReports)
  *   verifyPlace()  — mock stub
  *   submitPlace()  — writes to `contributions` collection (Phase 11A)
- *   submitReport() — mock stub
+ *   submitReport() — creates a private pending place update report
  *   searchPlaces() — client-side mock (no search index yet)
  */
 
@@ -489,6 +489,7 @@ import {
   doc,
   getDoc,
   getDocs,
+  limit,
   orderBy,
   query,
   where,
@@ -507,6 +508,14 @@ import type {
   Stats,
   ContributionStatus,
   Contribution,
+  VerificationRequest,
+  VerificationRequestStatus,
+  PlaceReportCategory,
+  PlaceReportField,
+  PlaceReportInput,
+  PlaceReport,
+  PlaceReportChanges,
+  PlaceReportValue,
 } from '@/types'
 
 // ─── Firestore document shape ────────────────────────────────────────────────
@@ -537,6 +546,9 @@ interface FirestoreVerification {
   source:            string
   verifiedAt?: unknown
   verifiedBy?: string | null
+  communityVerifiedAt?: Timestamp | null
+  communityVerifiedBy?: string | null
+  communityVerificationCount?: number
 }
 
 interface FirestorePlace {
@@ -625,6 +637,9 @@ function fromFirestore(id: string, data: FirestorePlace): Place {
           : null
       ),
       verifiedBy: data.verification.verifiedBy ?? null,
+      communityVerifiedAt: timestampToDateString(data.verification.communityVerifiedAt ?? null),
+      communityVerifiedBy: data.verification.communityVerifiedBy ?? null,
+      communityVerificationCount: data.verification.communityVerificationCount ?? 0,
     },
   }
 }
@@ -924,18 +939,304 @@ export async function rejectContribution(contributionId: string): Promise<void> 
   })
 }
 
+const VERIFICATION_FIELDS = [
+  'wheelchairEntrance', 'ramp', 'elevator', 'accessibleToilet',
+  'accessibleParking', 'tactilePaving', 'audioAssistance',
+] as const
+
+export async function submitVerificationRequest(input: {
+  placeId: string
+  placeName: string
+  accessibility: Record<(typeof VERIFICATION_FIELDS)[number], boolean>
+  notes: string | null
+}): Promise<string> {
+  const placeSnap = await getDoc(doc(db, 'places', input.placeId))
+  if (!placeSnap.exists()) throw new Error('place-not-found')
+  const canonicalPlaceName = (placeSnap.data().name as string | undefined) ?? input.placeName
+  const payload = Object.fromEntries(VERIFICATION_FIELDS.map(key => [key, input.accessibility[key]]))
+  const requestRef = await addDoc(collection(db, 'verificationRequests'), {
+    placeId: input.placeId,
+    placeName: canonicalPlaceName,
+    accessibility: payload,
+    notes: input.notes,
+    submitterUid: auth.currentUser?.uid ?? null,
+    status: 'pending' satisfies VerificationRequestStatus,
+    createdAt: serverTimestamp(),
+    reviewedAt: null,
+    reviewedBy: null,
+  })
+  return requestRef.id
+}
+
+export async function fetchPendingVerificationRequests(): Promise<VerificationRequest[]> {
+  const q = query(collection(db, 'verificationRequests'), where('status', '==', 'pending'), orderBy('createdAt', 'desc'))
+  const snap = await getDocs(q)
+  return snap.docs.map(d => verificationRequestFromDocument(d.id, d.data()))
+}
+
+export async function fetchReviewedVerificationRequests(): Promise<VerificationRequest[]> {
+  const q = query(
+    collection(db, 'verificationRequests'),
+    where('status', 'in', ['approved', 'rejected']),
+    orderBy('reviewedAt', 'desc'),
+    limit(50),
+  )
+  const snap = await getDocs(q)
+  return snap.docs.map(d => verificationRequestFromDocument(d.id, d.data()))
+}
+
+function verificationRequestFromDocument(id: string, data: Record<string, unknown>): VerificationRequest {
+  const createdAt = data.createdAt as Timestamp | null
+  const reviewedAt = data.reviewedAt as Timestamp | null
+  return {
+    id,
+    placeId: data.placeId as string,
+    placeName: data.placeName as string,
+    accessibility: Object.fromEntries(VERIFICATION_FIELDS.map(key => [key, Boolean((data.accessibility as Record<string, unknown> | undefined)?.[key])])) as VerificationRequest['accessibility'],
+    notes: (data.notes as string | null) ?? null,
+    submitterUid: (data.submitterUid as string | null) ?? null,
+    status: data.status as VerificationRequest['status'],
+    createdAt: createdAt ? createdAt.toDate().toISOString() : new Date().toISOString(),
+    reviewedAt: reviewedAt ? reviewedAt.toDate().toISOString() : null,
+    reviewedBy: (data.reviewedBy as string | null) ?? null,
+  }
+}
+
+export async function reviewVerificationRequest(requestId: string, decision: 'approved' | 'rejected'): Promise<void> {
+  const requestRef = doc(db, 'verificationRequests', requestId)
+  await runTransaction(db, async tx => {
+    const requestSnap = await tx.get(requestRef)
+    if (!requestSnap.exists()) throw new Error('verification-request-not-found')
+    if (requestSnap.data().status !== 'pending') throw new Error('verification-request-already-reviewed')
+
+    const placeId = requestSnap.data().placeId as string
+    const placeRef = doc(db, 'places', placeId)
+    const placeSnap = await tx.get(placeRef)
+    if (!placeSnap.exists()) throw new Error('verification-place-not-found')
+
+    const reviewedBy = auth.currentUser?.uid
+    if (!reviewedBy) throw new Error('admin-auth-required')
+    const reviewPatch = { status: decision, reviewedAt: serverTimestamp(), reviewedBy }
+    tx.update(requestRef, reviewPatch)
+
+    if (decision === 'approved') {
+      const verification = placeSnap.data().verification ?? {}
+      const currentCount = Number(verification.communityVerificationCount ?? 0)
+      tx.update(placeRef, {
+        'verification.communityVerificationCount': currentCount + 1,
+        'verification.communityVerifiedAt': serverTimestamp(),
+        'verification.communityVerifiedBy': reviewedBy,
+      })
+    }
+  })
+}
+
 // POST /api/places/:id/verify — mock stub
 export async function verifyPlace(placeId: string): Promise<{ success: boolean }> {
   console.log('[MOCK] Verify place:', placeId)
   return { success: true }
 }
 
-// POST /api/reports — mock stub
-export async function submitReport(
-  data: Record<string, unknown>
-): Promise<{ success: boolean; id: string }> {
-  console.log('[MOCK] Submit report:', data)
-  return { success: true, id: `report-${Date.now()}` }
+const REPORT_FIELDS_BY_CATEGORY: Record<PlaceReportCategory, readonly PlaceReportField[]> = {
+  'place-details': ['name', 'address', 'area', 'phone', 'website', 'openingHours'],
+  accessibility: [
+    'wheelchairEntrance', 'ramp', 'elevator', 'accessibleToilet',
+    'accessibleParking', 'tactilePaving', 'audioAssistance',
+  ],
+}
+
+// Creates a private pending report only; it never writes to the places collection.
+export async function submitReport(input: PlaceReportInput): Promise<{ success: true; id: string }> {
+  if (!input.placeId.trim()) throw new Error('report-place-id-required')
+  if (input.category !== 'place-details' && input.category !== 'accessibility') {
+    throw new Error('report-category-invalid')
+  }
+  const allowedFields = REPORT_FIELDS_BY_CATEGORY[input.category]
+  if (
+    input.fields.length === 0 ||
+    input.fields.length > allowedFields.length ||
+    new Set(input.fields).size !== input.fields.length ||
+    input.fields.some(field => !allowedFields.includes(field))
+  ) throw new Error('report-fields-invalid')
+  const description = input.description.trim()
+  if (description.length === 0 || description.length > 2000) throw new Error('report-description-invalid')
+
+  const placeSnap = await getDoc(doc(db, 'places', input.placeId))
+  if (!placeSnap.exists()) throw new Error('place-not-found')
+  const placeName = placeSnap.data().name
+  if (typeof placeName !== 'string' || placeName.length < 2 || placeName.length > 150) {
+    throw new Error('report-place-name-invalid')
+  }
+
+  const reportRef = await addDoc(collection(db, 'reports'), {
+    placeId: input.placeId,
+    placeName,
+    category: input.category,
+    fields: input.fields,
+    description,
+    reporterUid: auth.currentUser?.uid ?? null,
+    status: 'pending',
+    createdAt: serverTimestamp(),
+    reviewedAt: null,
+    reviewedBy: null,
+    reviewDecision: null,
+    rejectionReason: null,
+    appliedChanges: null,
+  })
+  return { success: true, id: reportRef.id }
+}
+
+function placeReportFromDocument(id: string, data: Record<string, unknown>): PlaceReport {
+  const createdAt = data.createdAt as Timestamp | null
+  const reviewedAt = data.reviewedAt as Timestamp | null
+  return {
+    id,
+    placeId: data.placeId as string,
+    placeName: data.placeName as string,
+    category: data.category as PlaceReportCategory,
+    fields: data.fields as PlaceReportField[],
+    description: data.description as string,
+    reporterUid: (data.reporterUid as string | null) ?? null,
+    status: data.status as PlaceReport['status'],
+    createdAt: createdAt instanceof Timestamp ? createdAt.toDate().toISOString() : new Date().toISOString(),
+    reviewedAt: reviewedAt instanceof Timestamp ? reviewedAt.toDate().toISOString() : null,
+    reviewedBy: (data.reviewedBy as string | null) ?? null,
+    reviewDecision: (data.reviewDecision as PlaceReport['reviewDecision']) ?? null,
+    rejectionReason: (data.rejectionReason as string | null) ?? null,
+    appliedChanges: (data.appliedChanges as PlaceReportChanges | null) ?? null,
+  }
+}
+
+export async function fetchPendingPlaceReports(): Promise<PlaceReport[]> {
+  const reportsQuery = query(collection(db, 'reports'), where('status', '==', 'pending'), orderBy('createdAt', 'desc'))
+  const snapshot = await getDocs(reportsQuery)
+  return snapshot.docs.map(report => placeReportFromDocument(report.id, report.data()))
+}
+
+export async function fetchReviewedPlaceReports(): Promise<PlaceReport[]> {
+  const reportsQuery = query(
+    collection(db, 'reports'),
+    where('status', 'in', ['approved', 'rejected']),
+    orderBy('reviewedAt', 'desc'),
+    limit(50),
+  )
+  const snapshot = await getDocs(reportsQuery)
+  return snapshot.docs.map(report => placeReportFromDocument(report.id, report.data()))
+}
+
+function reportFieldValue(placeData: Record<string, unknown>, field: PlaceReportField): unknown {
+  if (['wheelchairEntrance', 'ramp', 'elevator', 'accessibleToilet', 'accessibleParking', 'tactilePaving', 'audioAssistance'].includes(field)) {
+    return (placeData.accessibility as Record<string, unknown> | undefined)?.[field] ?? null
+  }
+  return placeData[field] ?? null
+}
+
+function validateReportReviewValues(
+  report: PlaceReport,
+  values: PlaceReportChanges,
+  label: 'current' | 'approved',
+): PlaceReportChanges {
+  const keys = Object.keys(values) as PlaceReportField[]
+  if (
+    keys.length !== report.fields.length ||
+    keys.some(field => !report.fields.includes(field)) ||
+    report.fields.some(field => !Object.prototype.hasOwnProperty.call(values, field))
+  ) throw new Error(`report-${label}-fields-invalid`)
+
+  const result: PlaceReportChanges = {}
+  for (const field of report.fields) {
+    const value = values[field]
+    const isAccessibility = ['wheelchairEntrance', 'ramp', 'elevator', 'accessibleToilet', 'accessibleParking', 'tactilePaving', 'audioAssistance'].includes(field)
+    if (isAccessibility) {
+      if (value !== null && typeof value !== 'boolean') throw new Error(`report-${label}-value-invalid`)
+      result[field] = value
+      continue
+    }
+
+    const nullableText = field === 'phone' || field === 'website' || field === 'openingHours'
+    if (value === null && nullableText) {
+      result[field] = null
+      continue
+    }
+    if (typeof value !== 'string') throw new Error(`report-${label}-value-invalid`)
+    const trimmed = value.trim()
+    const minLength = field === 'name' ? 2 : field === 'address' ? 5 : field === 'area' ? 2 : 0
+    if (trimmed.length < minLength) throw new Error(`report-${label}-value-required`)
+    const maxLength = field === 'website' ? 2048 : field === 'address' ? 300 : field === 'area' ? 100 : field === 'phone' ? 30 : field === 'name' ? 150 : 500
+    if (trimmed.length > maxLength) throw new Error(`report-${label}-value-too-long`)
+    result[field] = trimmed || (nullableText ? null : trimmed)
+  }
+  return result
+}
+
+function reportFieldUpdatePath(field: PlaceReportField): string {
+  return ['wheelchairEntrance', 'ramp', 'elevator', 'accessibleToilet', 'accessibleParking', 'tactilePaving', 'audioAssistance'].includes(field)
+    ? `accessibility.${field}`
+    : field
+}
+
+export async function reviewPlaceReport(input: {
+  reportId: string
+  decision: 'approved' | 'rejected'
+  reason?: string
+  expectedCurrentValues?: PlaceReportChanges
+  approvedChanges?: PlaceReportChanges
+}): Promise<void> {
+  const reportRef = doc(db, 'reports', input.reportId)
+  const reviewerUid = auth.currentUser?.uid
+  if (!reviewerUid) throw new Error('admin-auth-required')
+
+  if (input.decision === 'rejected') {
+    const reason = input.reason?.trim() ?? ''
+    if (!reason || reason.length > 1000) throw new Error('report-rejection-reason-required')
+    await runTransaction(db, async transaction => {
+      const reportSnapshot = await transaction.get(reportRef)
+      if (!reportSnapshot.exists()) throw new Error('report-not-found')
+      if (reportSnapshot.data().status !== 'pending') throw new Error('report-already-reviewed')
+      transaction.update(reportRef, {
+        status: 'rejected',
+        reviewDecision: 'rejected',
+        reviewedAt: serverTimestamp(),
+        reviewedBy: reviewerUid,
+        rejectionReason: reason,
+        appliedChanges: null,
+      })
+    })
+    return
+  }
+
+  await runTransaction(db, async transaction => {
+    const reportSnapshot = await transaction.get(reportRef)
+    if (!reportSnapshot.exists()) throw new Error('report-not-found')
+    const reportData = reportSnapshot.data()
+    if (reportData.status !== 'pending') throw new Error('report-already-reviewed')
+
+    const report = placeReportFromDocument(reportSnapshot.id, reportData)
+    const expectedValues = validateReportReviewValues(report, input.expectedCurrentValues ?? {}, 'current')
+    const approvedChanges = validateReportReviewValues(report, input.approvedChanges ?? {}, 'approved')
+    const placeRef = doc(db, 'places', report.placeId)
+    const placeSnapshot = await transaction.get(placeRef)
+    if (!placeSnapshot.exists()) throw new Error('report-place-not-found')
+
+    const placeData = placeSnapshot.data()
+    for (const field of report.fields) {
+      const expected = expectedValues[field] ?? null
+      const current = reportFieldValue(placeData, field) ?? null
+      if (current !== expected) throw new Error('report-place-changed')
+    }
+
+    const placePatch: Record<string, PlaceReportValue> = {}
+    for (const field of report.fields) placePatch[reportFieldUpdatePath(field)] = approvedChanges[field] ?? null
+    transaction.update(placeRef, placePatch)
+    transaction.update(reportRef, {
+      status: 'approved',
+      reviewDecision: 'approved',
+      reviewedAt: serverTimestamp(),
+      reviewedBy: reviewerUid,
+      rejectionReason: null,
+      appliedChanges: approvedChanges,
+    })
+  })
 }
 
 // POST /api/places — Phase 11A: writes to contributions collection

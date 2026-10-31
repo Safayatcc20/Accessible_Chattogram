@@ -120,7 +120,7 @@ export function verificationLabel(status: VerificationStatus): string {
   const labels: Record<VerificationStatus, string> = {
     verified: 'Verified',
     'community-reported': 'Community Reported',
-    unverified: 'Not Verified','admin-verified':'admin-verified',
+    unverified: 'Not Verified','admin-verified':'Verified',
   }
   return labels[status]
 }
@@ -133,6 +133,7 @@ export function verificationDescription(
 ): string {
   switch (status) {
     case 'admin-verified':
+      return 'Reviewed and approved by an administrator.'
     case 'verified':
       return 'Reviewed and approved by an administrator.'
 

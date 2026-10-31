@@ -207,8 +207,16 @@ export default function PlaceDetails() {
           />
           <InfoItem
             label="Community Confirmations"
-            value={`${place.verification.verificationCount} confirmations`}
+            value={`${place.verification.communityVerificationCount ?? 0} admin-approved community confirmations`}
           />
+          {(place.verification.communityVerificationCount ?? 0) > 0 && (
+            <InfoItem
+              label="Community Verified"
+              value={place.verification.communityVerifiedAt
+                ? `${formatDate(place.verification.communityVerifiedAt)} (${getRelativeDate(place.verification.communityVerifiedAt)})`
+                : 'Confirmed by community and reviewed by an administrator'}
+            />
+          )}
           <InfoItem
             label="Community Reports"
             value={`${place.verification.communityReports} reports submitted`}
@@ -231,13 +239,13 @@ export default function PlaceDetails() {
       {/* Actions */}
       <div className="flex flex-col sm:flex-row gap-3">
         <Button asChild className="flex-1">
-          <Link to="/contribute">
+          <Link to={`/places/${place.id}/verify`}>
             <ShieldCheck className="w-4 h-4 mr-2" aria-hidden="true" />
             Verify This Place
           </Link>
         </Button>
         <Button asChild variant="outline" className="flex-1">
-          <Link to="/contribute">
+          <Link to={`/places/${place.id}/report`}>
             <Users className="w-4 h-4 mr-2" aria-hidden="true" />
             Report an Update
           </Link>
